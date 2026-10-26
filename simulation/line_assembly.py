@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from pathlib import Path
 
 import mujoco
 import mujoco_menagerie as menagerie
@@ -752,6 +753,10 @@ if __name__ == "__main__":
                       help="Use the original staging row for comparison")
     parser.add_argument("--seed", type=int, help="Repeatable random scene seed")
     parser.add_argument("--yaw-range-deg", type=float, default=30, help="Random yaw half-range")
+    parser.add_argument(
+        "--record-gif", type=Path, metavar="PATH",
+        help="record the online Cartesian run as a GIF (requires ffmpeg and an OpenGL display)",
+    )
     parser.add_argument("--legacy-planner", "--planner", dest="legacy_planner",
                         choices=PLANNER_NAMES,
                         help="Run the historical IK trajectory controller for comparison")
@@ -759,6 +764,8 @@ if __name__ == "__main__":
     if not 0 <= args.yaw_range_deg <= 45:
         parser.error("yaw range must be 0–45 degrees")
     if args.legacy_planner:
+        if args.record_gif is not None:
+            parser.error("--record-gif is only available with the online Cartesian controller")
         run(args.headless, args.randomize, args.seed,
             args.yaw_range_deg, args.legacy_planner)
     else:
@@ -766,4 +773,7 @@ if __name__ == "__main__":
             from .task_space_control import run as run_cartesian
         except ImportError:
             from task_space_control import run as run_cartesian
-        run_cartesian(args.headless, args.randomize, args.seed, args.yaw_range_deg)
+        run_cartesian(
+            args.headless, args.randomize, args.seed, args.yaw_range_deg,
+            args.record_gif,
+        )

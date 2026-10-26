@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from pathlib import Path
+import shutil
+import subprocess
 
 import mujoco
 import numpy as np
@@ -31,6 +34,70 @@ POST_RUN_HOLD_SECONDS = 12.0  # catch delayed sag/collisions in headless validat
 PARK_MIN_TOOL_CLEARANCE = 0.20  # pinch center must stay this far above the table
 POSITION_TOLERANCE = 0.005  # m
 ORIENTATION_TOLERANCE = np.radians(3.0)
+GIF_WIDTH = 480
+GIF_HEIGHT = 360
+GIF_SAMPLE_PERIOD = 0.4  # simulation seconds per source frame
+GIF_OUTPUT_FPS = 12
+
+
+class GifRecorder:
+    """Stream MuJoCo offscreen frames to ffmpeg and encode an optimized GIF."""
+
+    def __init__(self, model: mujoco.MjModel, path: Path):
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError("GIF recording requires ffmpeg (install with `brew install ffmpeg`)")
+        self.path = path.expanduser().resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.renderer = mujoco.Renderer(model, height=GIF_HEIGHT, width=GIF_WIDTH)
+        except Exception as error:
+            raise RuntimeError(
+                "MuJoCo could not create its offscreen OpenGL context. Run GIF recording "
+                "from an active macOS desktop session."
+            ) from error
+        self.camera = mujoco.MjvCamera()
+        mujoco.mjv_defaultFreeCamera(model, self.camera)
+        self.camera.lookat[:] = [0.0, 0.13, 0.83]
+        self.camera.distance = 1.75
+        self.camera.azimuth = 135
+        self.camera.elevation = -28
+        self.next_capture = 0.0
+        filter_graph = (
+            f"fps={GIF_OUTPUT_FPS},split[s0][s1];"
+            "[s0]palettegen=max_colors=192[p];"
+            "[s1][p]paletteuse=dither=bayer:bayer_scale=3"
+        )
+        self.process = subprocess.Popen(
+            [
+                ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo",
+                "-pixel_format", "rgb24", "-video_size", f"{GIF_WIDTH}x{GIF_HEIGHT}",
+                "-framerate", str(1 / GIF_SAMPLE_PERIOD), "-i", "pipe:0",
+                "-filter_complex", filter_graph, "-loop", "0", str(self.path),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+    def capture(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        if data.time + 1e-9 < self.next_capture:
+            return
+        self.renderer.update_scene(data, camera=self.camera)
+        frame = self.renderer.render()
+        assert self.process.stdin is not None
+        self.process.stdin.write(frame.tobytes())
+        self.next_capture += GIF_SAMPLE_PERIOD
+
+    def close(self) -> None:
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+        error = self.process.stderr.read().decode("utf-8", errors="replace") if self.process.stderr else ""
+        code = self.process.wait()
+        self.renderer.close()
+        if code:
+            raise RuntimeError(f"ffmpeg failed to create {self.path}: {error.strip()}")
+        print(f"GIF saved: {self.path}")
 
 
 @dataclass(frozen=True)
@@ -304,7 +371,7 @@ class CartesianController:
 
 def run(
     headless: bool, randomize: bool = True, seed: int | None = None,
-    yaw_range_deg: float = 30,
+    yaw_range_deg: float = 30, record_gif: Path | None = None,
 ) -> None:
     if randomize and seed is None:
         seed = int(np.random.SeedSequence().generate_state(1)[0])
@@ -316,11 +383,14 @@ def run(
     mujoco.mj_forward(model, data)
     print(f"Cartesian Jacobian controller; seed={seed if randomize else 'fixed'}")
     controller = CartesianController(model, data)
+    recorder = GifRecorder(model, record_gif) if record_gif is not None else None
     mujoco.set_mjcb_control(controller)
     try:
-        if headless:
+        if headless or recorder is not None:
             while not controller.done and controller.failed is None and data.time < 300:
                 mujoco.mj_step(model, data)
+                if recorder is not None:
+                    recorder.capture(model, data)
             if controller.done:
                 stop_time = data.time + POST_RUN_HOLD_SECONDS
                 while data.time < stop_time:
@@ -330,6 +400,8 @@ def run(
             viewer.launch(model, data)
     finally:
         mujoco.set_mjcb_control(None)
+        if recorder is not None:
+            recorder.close()
     if controller.failed:
         raise RuntimeError(controller.failed)
     if not controller.done:
@@ -362,11 +434,12 @@ def run(
         )
     print(f"{passed}/5 placed; simulation time {data.time:.1f}s")
     print(f"Unsafe contacts: {controller.unsafe_contacts[:5]}")
-    if headless:
+    if headless or recorder is not None:
         print(f"Parked tool clearance: at least "
               f"{controller.park_min_tool_clearance:.3f} m above table during hold")
     if (passed != len(scene.COMPONENTS) or controller.unsafe_contacts
-            or (headless and controller.park_min_tool_clearance < PARK_MIN_TOOL_CLEARANCE)):
+            or ((headless or recorder is not None)
+                and controller.park_min_tool_clearance < PARK_MIN_TOOL_CLEARANCE)):
         raise RuntimeError("Cartesian controller failed physical validation")
 
 
@@ -378,7 +451,11 @@ if __name__ == "__main__":
     mode.add_argument("--fixed", dest="randomize", action="store_false")
     parser.add_argument("--seed", type=int)
     parser.add_argument("--yaw-range-deg", type=float, default=30)
+    parser.add_argument(
+        "--record-gif", type=Path, metavar="PATH",
+        help="record a time-lapse GIF (runs headlessly; requires ffmpeg and an OpenGL display)",
+    )
     args = parser.parse_args()
     if not 0 <= args.yaw_range_deg <= 45:
         parser.error("yaw range must be 0–45 degrees")
-    run(args.headless, args.randomize, args.seed, args.yaw_range_deg)
+    run(args.headless, args.randomize, args.seed, args.yaw_range_deg, args.record_gif)

@@ -61,6 +61,16 @@ You can run the same controller directly with `simulation/task_space_control.py`
 ./.venv/bin/python simulation/line_assembly.py --seed 0 --legacy-planner bounded
 ```
 
+To record a compact time-lapse GIF of a reproducible run, install `ffmpeg` (`brew install ffmpeg`) and run:
+
+```bash
+./.venv/bin/python simulation/line_assembly.py --seed 7 --record-gif docs/images/online-cartesian-pick-place.gif
+```
+
+The recording option runs the task headlessly, samples the MuJoCo scene, and writes the GIF at the path supplied. It needs an active macOS graphics session for MuJoCo's OpenGL renderer.
+
+![Online Cartesian pick-and-place demonstration](docs/images/online-cartesian-pick-place.gif)
+
 The seed makes one random scene repeatable. The arm base is on the table's horizontal centreline (`x=0`) and faces positive Y. All five starting cubes are scattered in front of it (`x=-0.35–0.35 m`, `y=0.08–0.56 m`); the target row is directly in front at `y=0.35 m`, with `x=-0.18, -0.09, 0, 0.09, 0.18 m`. Its centre is aligned with the arm base. Random starts keep at least 14 cm between cubes and 14 cm from target centres. A conservative radial range excludes the arm base and distant edges. Yaw is within ±30° by default; change it with `--yaw-range-deg` (0–45). The controller reads each cube's actual simulated starting pose and rotates it toward 0° yaw during transfer.
 
 The arm is mounted on a dark optical breadboard with a 25 mm visual hole pattern and moves five 5 × 5 × 8 cm proxy housings to a straight target line in front of it: lens 1, pinhole, lens 2, beam splitter, and mirror. The holes are visual only; the collision surface remains flat. Each target is marked on the table. The tool rotates 90° about the vertical axis at grasp and placement so the fingers open perpendicular to the target row. Headless runs check both finger contacts, lift, sustained grip and table clearance during transfer, placement within 1 cm in XY and 5° in yaw and tilt, and unwanted arm/table or arm/other-object contacts. See [docs/paper-components.md](docs/paper-components.md) for how this scene maps to the paper, [docs/task-space-control.md](docs/task-space-control.md) for the new controller, and [docs/planner-comparison.md](docs/planner-comparison.md) for the historical planner experiments.
