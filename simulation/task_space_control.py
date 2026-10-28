@@ -122,17 +122,28 @@ def progress(elapsed: float, duration: float) -> tuple[float, float]:
     return float(position), float(rate)
 
 
-def phases_for_scene(model: mujoco.MjModel, data: mujoco.MjData) -> list[Phase]:
+def phases_for_scene(
+    model: mujoco.MjModel, data: mujoco.MjData,
+    target_xs: tuple[float, ...] = scene.TARGET_XS,
+    object_poses: dict[str, np.ndarray] | None = None,
+) -> list[Phase]:
     site = model.site("pinch_center").id
     home_position = data.site_xpos[site].copy()
     home_orientation = Rotation.from_matrix(data.site_xmat[site].reshape(3, 3))
     place_orientation = Rotation.from_euler("z", scene.GRIP_YAW) * home_orientation
     phases: list[Phase] = []
 
-    for (name, _), target_x in zip(scene.COMPONENTS, scene.TARGET_XS):
-        body = model.body(name).id
-        position = data.xpos[body].copy()
-        yaw = Rotation.from_matrix(data.xmat[body].reshape(3, 3)).as_euler("xyz")[2]
+    for (name, _), target_x in zip(scene.COMPONENTS, target_xs):
+        if object_poses is None:
+            body = model.body(name).id
+            position = data.xpos[body].copy()
+            rotation = data.xmat[body].reshape(3, 3)
+        else:
+            if name not in object_poses:
+                continue
+            pose = np.asarray(object_poses[name])
+            position, rotation = pose[:3, 3], pose[:3, :3]
+        yaw = Rotation.from_matrix(rotation).as_euler("xyz")[2]
         pickup_yaw = yaw + scene.GRIP_YAW
         pickup_orientation = Rotation.from_euler("z", pickup_yaw) * home_orientation
         grasp_height = position[2] + scene.GRASP_Z_OFFSET
@@ -163,7 +174,11 @@ def phases_for_scene(model: mujoco.MjModel, data: mujoco.MjData) -> list[Phase]:
 
 
 class CartesianController:
-    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData):
+    def __init__(
+        self, model: mujoco.MjModel, data: mujoco.MjData,
+        target_xs: tuple[float, ...] = scene.TARGET_XS,
+        object_poses: dict[str, np.ndarray] | None = None,
+    ):
         self.model = model
         self.site = model.site("pinch_center").id
         self.qpos_ids, self.actuator_ids = scene.arm_indices(model)
@@ -171,7 +186,7 @@ class CartesianController:
             model.jnt_dofadr[model.joint(f"joint{i}").id] for i in range(1, 8)
         ])
         self.gripper_actuator = model.actuator("gripper").id
-        self.phases = phases_for_scene(model, data)
+        self.phases = phases_for_scene(model, data, target_xs, object_poses)
         self.phase_index = 0
         self.phase_start_time = float(data.time)
         self.start_position = data.site_xpos[self.site].copy()

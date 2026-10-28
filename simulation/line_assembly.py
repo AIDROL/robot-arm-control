@@ -27,6 +27,7 @@ PICKUP_Y = 0.55
 TARGET_Y = 0.35
 SOURCE_SLOT_XS = (-0.32, -0.16, 0.00, 0.16, 0.32)
 TARGET_XS = (-0.18, -0.09, 0.00, 0.09, 0.18)
+FAT_TARGET_XS = (-0.36, -0.18, 0.00, 0.18, 0.36)
 SPAWN_X_RANGE = (-0.35, 0.35)
 SPAWN_Y_RANGE = (0.08, 0.56)
 MIN_SOURCE_SPACING = 0.14
@@ -38,6 +39,14 @@ PICKUP_CLEARANCE = 0.14
 CARRY_CLEARANCE = 0.16
 PLACE_SETTLE = 0.003  # release just above the surface; avoid a tall housing tipping
 GRIP_YAW = np.pi / 2  # open along Y, perpendicular to the target row
+FAT_STAGING_XY = (0.46, 0.15)
+FAT_HALF_SIZE = (0.018, 0.008, 0.045)  # 36 x 16 x 90 mm slim plate
+FAT_KEY_OFFSETS = (("lower", 0.012, -0.012), ("upper", -0.012, 0.012))
+FAT_KEY_TIP_Y = 0.040
+FAT_INSERT_YAW = -np.pi / 2  # FAT +Y tool axis enters the housing's -X side
+SIDE_MARKER_LOCAL = np.array([-BLOCK_HALF_WIDTH - 0.0005, -0.014, 0.024])
+SIDE_MARKER_EULER = (0.0, -np.pi / 2, 0.0)  # model uses radians
+SCREW_MIDPOINT_LOCAL = np.array([-BLOCK_HALF_WIDTH - 0.004, 0.0, 0.020])
 PLANNER_CLEARANCE = 0.002  # minimum gripper clearance from the table and other housings
 PLANNER_JOINT_STEP = 0.15  # max joint increment between collision samples, radians
 IK_BRANCH_CHANGE_PENALTY = 0.5  # preserve continuity unless another branch is clearly better
@@ -102,10 +111,13 @@ def motion_duration(q_path: np.ndarray, requested: float) -> float:
     return max(requested, float(peak / MAX_COMMAND_SPEED))
 
 
-def random_start_poses(seed: int | None, yaw_range_deg: float) -> tuple[np.ndarray, np.ndarray]:
+def random_start_poses(
+    seed: int | None, yaw_range_deg: float,
+    target_xs: tuple[float, ...] = TARGET_XS,
+) -> tuple[np.ndarray, np.ndarray]:
     """Sample scattered, separated tabletop poses in a nominal arm work area."""
     rng = np.random.default_rng(seed)
-    targets = np.column_stack((TARGET_XS, np.full(len(COMPONENTS), TARGET_Y)))
+    targets = np.column_stack((target_xs, np.full(len(COMPONENTS), TARGET_Y)))
     positions: list[np.ndarray] = []
     for _ in COMPONENTS:
         for _attempt in range(10000):
@@ -129,14 +141,16 @@ def random_start_poses(seed: int | None, yaw_range_deg: float) -> tuple[np.ndarr
 
 def make_scene(
     randomize: bool = True, seed: int | None = None,
-    yaw_range_deg: float = 30,
+    yaw_range_deg: float = 30, include_fat: bool = False,
+    target_xs: tuple[float, ...] = TARGET_XS,
+    vision: bool = False,
 ) -> mujoco.MjModel:
     source = menagerie.get("ufactory_xarm7").path() / "scene.xml"
     spec = mujoco.MjSpec.from_file(str(source))
     source_xy = np.column_stack((SOURCE_SLOT_XS, np.full(len(COMPONENTS), PICKUP_Y)))
     source_yaw = np.zeros(len(COMPONENTS))
     if randomize:
-        source_xy, source_yaw = random_start_poses(seed, yaw_range_deg)
+        source_xy, source_yaw = random_start_poses(seed, yaw_range_deg, target_xs)
     # Mount the arm on the table centreline; the target row shares x=0.
     spec.body("link_base").pos = [0, 0, TABLE_Z]
     spec.body("link_base").quat = [np.sqrt(0.5), 0, 0, np.sqrt(0.5)]
@@ -165,7 +179,7 @@ def make_scene(
                 rgba=[0.33, 0.35, 0.38, 1],
             )
 
-    for index, ((name, color), x) in enumerate(zip(COMPONENTS, TARGET_XS)):
+    for index, ((name, color), x) in enumerate(zip(COMPONENTS, target_xs)):
         world.add_geom(
             name=f"target_{name}", type=mujoco.mjtGeom.mjGEOM_BOX,
             pos=[x, TARGET_Y, TABLE_Z + 0.001], size=[0.03, 0.03, 0.001],
@@ -201,6 +215,78 @@ def make_scene(
                 size=[0.003, 0.003, 0.0005], mass=0,
                 contype=0, conaffinity=0, rgba=[0.02, 0.02, 0.02, 1],
             )
+        if include_fat:
+            # The fiducial and both tuning targets share the housing's -X side.
+            # They are visual/geometric proxies, not decoded tags or turning screws.
+            cube.add_geom(
+                name=f"{name}_side_tag", type=mujoco.mjtGeom.mjGEOM_BOX,
+                pos=SIDE_MARKER_LOCAL,
+                size=[0.0004, 0.009, 0.009], rgba=[0.96, 0.96, 0.96, 1],
+                mass=0, contype=0, conaffinity=0,
+            )
+            cube.add_site(
+                name=f"{name}_side_marker", pos=SIDE_MARKER_LOCAL,
+                euler=SIDE_MARKER_EULER,
+                size=[0.001], rgba=[0, 0, 0, 0],
+            )
+            for dy, dz in ((-0.004, -0.004), (-0.004, 0.004),
+                           (0.004, -0.004), (0.004, 0.004)):
+                cube.add_geom(
+                    type=mujoco.mjtGeom.mjGEOM_BOX,
+                    pos=SIDE_MARKER_LOCAL + [-0.0005, dy, dz],
+                    size=[0.0002, 0.0014, 0.0014],
+                    rgba=[0.02, 0.02, 0.02, 1], mass=0,
+                    contype=0, conaffinity=0,
+                )
+            for label, x_offset, z_offset in FAT_KEY_OFFSETS:
+                screw_y = -x_offset  # after the FAT's -90 deg insertion yaw
+                cube.add_geom(
+                    name=f"{name}_{label}_screw", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                    pos=[-BLOCK_HALF_WIDTH - 0.002, screw_y,
+                         SCREW_MIDPOINT_LOCAL[2] + z_offset],
+                    euler=[0, -np.pi / 2, 0], size=[0.0045, 0.002],
+                    rgba=[0.24, 0.26, 0.28, 1], mass=0,
+                    contype=0, conaffinity=0,
+                )
+                cube.add_site(
+                    name=f"{name}_{label}_screw_center",
+                    pos=SCREW_MIDPOINT_LOCAL + [0, screw_y, z_offset],
+                    size=[0.001], rgba=[1, 0.65, 0.1, 0.5],
+                )
+    if include_fat:
+        fat = world.add_body(
+            name="fat", mocap=True,
+            pos=[*FAT_STAGING_XY, TABLE_Z + FAT_HALF_SIZE[2]],
+        )
+        fat.add_geom(
+            name="fat_housing", type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=FAT_HALF_SIZE, rgba=[0.07, 0.08, 0.10, 1],
+            contype=0, conaffinity=0,
+        )
+        # Clamp the two narrow side faces above the central tool shafts.
+        fat.add_site(name="fat_grasp", pos=[0, 0, 0.030], size=[0.002])
+        fat.add_site(
+            name="fat_camera", pos=[0, FAT_HALF_SIZE[1], 0.020],
+            euler=[-np.pi / 2, 0, 0], size=[0.002],
+        )
+        for label, x_offset, z_offset in FAT_KEY_OFFSETS:
+            fat.add_geom(
+                name=f"fat_{label}_key", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                pos=[x_offset, (FAT_HALF_SIZE[1] + FAT_KEY_TIP_Y) / 2, z_offset],
+                euler=[np.pi / 2, 0, 0],
+                size=[0.002, (FAT_KEY_TIP_Y - FAT_HALF_SIZE[1]) / 2],
+                rgba=[0.72, 0.75, 0.78, 1], contype=0, conaffinity=0,
+            )
+            fat.add_site(
+                name=f"fat_{label}_key_tip",
+                pos=[x_offset, FAT_KEY_TIP_Y, z_offset], size=[0.001],
+            )
+    if vision:
+        try:
+            from .global_camera import configure_vision_scene
+        except ImportError:
+            from global_camera import configure_vision_scene
+        configure_vision_scene(spec)
     return spec.compile()
 
 
