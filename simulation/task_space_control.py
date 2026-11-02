@@ -15,6 +15,10 @@ import subprocess
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
+try:
+    from .housing_profile import for_model
+except ImportError:
+    from housing_profile import for_model
 
 try:
     from . import line_assembly as scene
@@ -108,6 +112,8 @@ class Phase:
     duration: float
     grip: float
     wait_for_pose: bool = True
+    position_tolerance: float = POSITION_TOLERANCE
+    orientation_tolerance: float = ORIENTATION_TOLERANCE
 
 
 def clamp_norm(vector: np.ndarray, maximum: float) -> np.ndarray:
@@ -126,14 +132,31 @@ def phases_for_scene(
     model: mujoco.MjModel, data: mujoco.MjData,
     target_xs: tuple[float, ...] = scene.TARGET_XS,
     object_poses: dict[str, np.ndarray] | None = None,
+    geometry=None,
+    components=None,
+    target_poses=None,
 ) -> list[Phase]:
     site = model.site("pinch_center").id
     home_position = data.site_xpos[site].copy()
     home_orientation = Rotation.from_matrix(data.site_xmat[site].reshape(3, 3))
-    place_orientation = Rotation.from_euler("z", scene.GRIP_YAW) * home_orientation
+    geometry = for_model(model) if geometry is None else geometry
+    if geometry.is_selected:
+        home_orientation = geometry.gripper_reference
+    place_orientation = Rotation.from_euler("z", geometry.placement_yaw+geometry.grip_yaw) * home_orientation
+    # The post/base travels with the frame. Its bottom must clear another
+    # complete assembly's roof, including the newly added support height.
+    carry_clearance = scene.CARRY_CLEARANCE + geometry.support_height
     phases: list[Phase] = []
 
-    for (name, _), target_x in zip(scene.COMPONENTS, target_xs):
+    for (name, _), target_x in zip(scene.COMPONENTS if components is None else components, target_xs):
+        if object_poses is not None and name not in object_poses:
+            continue
+        destination = (np.asarray(target_poses[name]) if target_poses is not None else None)
+        destination_position = (destination[:3, 3] if destination is not None else
+                                np.array([target_x, scene.TARGET_Y, scene.TABLE_Z+geometry.body_height]))
+        destination_yaw = (Rotation.from_matrix(destination[:3, :3]).as_euler('xyz')[2]
+                           if destination is not None else geometry.placement_yaw)
+        place_orientation = Rotation.from_euler('z', destination_yaw+geometry.grip_yaw)*home_orientation
         if object_poses is None:
             body = model.body(name).id
             position = data.xpos[body].copy()
@@ -144,28 +167,22 @@ def phases_for_scene(
             pose = np.asarray(object_poses[name])
             position, rotation = pose[:3, 3], pose[:3, :3]
         yaw = Rotation.from_matrix(rotation).as_euler("xyz")[2]
-        pickup_yaw = yaw + scene.GRIP_YAW
+        pickup_yaw = yaw + geometry.grip_yaw
         pickup_orientation = Rotation.from_euler("z", pickup_yaw) * home_orientation
-        grasp_height = position[2] + scene.GRASP_Z_OFFSET
+        grasp_height = position[2] + geometry.grasp_z
         pickup = np.array([position[0], position[1], grasp_height + scene.PICKUP_CLEARANCE])
         grasp = np.array([position[0], position[1], grasp_height])
-        lifted = np.array([position[0], position[1], grasp_height + scene.CARRY_CLEARANCE])
-        carried = np.array([
-            target_x, scene.TARGET_Y,
-            scene.BLOCK_Z + scene.GRASP_Z_OFFSET + scene.CARRY_CLEARANCE,
-        ])
-        placed = np.array([
-            target_x, scene.TARGET_Y,
-            scene.BLOCK_Z + scene.GRASP_Z_OFFSET + scene.PLACE_SETTLE,
-        ])
-        retreated = np.array([target_x, scene.TARGET_Y, scene.BLOCK_Z + 0.25])
+        lifted = np.array([position[0], position[1], grasp_height + carry_clearance])
+        carried = destination_position + [0,0,geometry.grasp_z+carry_clearance]
+        placed = destination_position + [0,0,geometry.grasp_z+geometry.place_offset]
+        retreated = destination_position + [0,0,.25]
         phases.extend((
             Phase(f"{name}: pregrasp", pickup, pickup_orientation, 3.0, 0.0),
             Phase(f"{name}: approach", grasp, pickup_orientation, 2.0, 0.0),
-            Phase(f"{name}: close", grasp, pickup_orientation, 1.6, 255.0, False),
-            Phase(f"{name}: lift", lifted, pickup_orientation, 2.0, 255.0),
-            Phase(f"{name}: transfer", carried, place_orientation, 4.5, 255.0),
-            Phase(f"{name}: lower", placed, place_orientation, 2.5, 255.0),
+            Phase(f"{name}: close", grasp, pickup_orientation, 2.0 if geometry.is_selected else 1.6, geometry.grip_command, False),
+            Phase(f"{name}: lift", lifted, pickup_orientation, 2.0, geometry.grip_command),
+            Phase(f"{name}: transfer", carried, place_orientation, 4.5, geometry.grip_command),
+            Phase(f"{name}: lower", placed, place_orientation, 2.5, geometry.grip_command),
             Phase(f"{name}: release", placed, place_orientation, 1.0, 0.0, False),
             Phase(f"{name}: retreat", retreated, place_orientation, 2.5, 0.0),
         ))
@@ -178,15 +195,20 @@ class CartesianController:
         self, model: mujoco.MjModel, data: mujoco.MjData,
         target_xs: tuple[float, ...] = scene.TARGET_XS,
         object_poses: dict[str, np.ndarray] | None = None,
+        phases: list[Phase] | None = None,
+        object_geoms: dict[int, str] | None = None,
+        target_poses=None,
     ):
         self.model = model
+        self.geometry = for_model(model)
         self.site = model.site("pinch_center").id
         self.qpos_ids, self.actuator_ids = scene.arm_indices(model)
         self.dof_ids = np.array([
             model.jnt_dofadr[model.joint(f"joint{i}").id] for i in range(1, 8)
         ])
         self.gripper_actuator = model.actuator("gripper").id
-        self.phases = phases_for_scene(model, data, target_xs, object_poses)
+        self.phases = phases if phases is not None else phases_for_scene(
+            model, data, target_xs, object_poses, components=scene.components_for_model(model),target_poses=target_poses)
         self.phase_index = 0
         self.phase_start_time = float(data.time)
         self.start_position = data.site_xpos[self.site].copy()
@@ -206,9 +228,7 @@ class CartesianController:
         ])
         for index in (0, 2, 4, 6):
             self.joint_limits[index] = [-np.pi, np.pi]
-        self.object_geoms = {
-            model.geom(f"{name}_collision").id: name for name, _ in scene.COMPONENTS
-        }
+        self.object_geoms = object_geoms if object_geoms is not None else scene.component_geom_map(model)
         self.table_geom = model.geom("workbench").id
         self.pad_geoms = {
             model.geom(f"{side}_finger_pad_{number}").id: side
@@ -230,10 +250,11 @@ class CartesianController:
                 ancestor = int(model.body_parentid[ancestor])
             if ancestor == gripper_base:
                 self.gripper_geoms.add(geom)
-        self.pad_contacts = {name: set() for name, _ in scene.COMPONENTS}
-        self.lifted = {name: False for name, _ in scene.COMPONENTS}
-        self.transfer_min_height = {name: float("inf") for name, _ in scene.COMPONENTS}
-        self.transfer_max_grip_gap = {name: 0.0 for name, _ in scene.COMPONENTS}
+        object_names = set(self.object_geoms.values())
+        self.pad_contacts = {name: set() for name in object_names}
+        self.lifted = {name: False for name in object_names}
+        self.transfer_min_height = {name: float("inf") for name in object_names}
+        self.transfer_max_grip_gap = {name: 0.0 for name in object_names}
         self.unsafe_contacts: list[tuple[float, str, str]] = []
         self.park_min_tool_clearance = float("inf")
         print(f"{data.time:6.1f}s  {self.phases[0].label}")
@@ -269,14 +290,14 @@ class CartesianController:
             cube = state.xpos[self.model.body(active_name).id]
             self.transfer_min_height[active_name] = min(
                 self.transfer_min_height[active_name],
-                float(cube[2] - scene.BLOCK_HALF_HEIGHT - scene.TABLE_Z),
+                float(cube[2] - self.geometry.body_height - scene.TABLE_Z),
             )
             self.transfer_max_grip_gap[active_name] = max(
                 self.transfer_max_grip_gap[active_name],
                 float(np.linalg.norm(cube - state.site_xpos[self.site])),
             )
-        for name, _ in scene.COMPONENTS:
-            if state.xpos[self.model.body(name).id, 2] > scene.TABLE_Z + 0.085:
+        for name in self.lifted:
+            if state.xpos[self.model.body(name).id, 2] > scene.TABLE_Z + self.geometry.body_height + .045:
                 self.lifted[name] = True
         for contact in state.contact[: state.ncon]:
             a, b = contact.geom1, contact.geom2
@@ -347,7 +368,11 @@ class CartesianController:
             jacobian @ jacobian.T + DAMPING**2 * np.eye(6), np.eye(6)
         )
         joint_velocity = inverse @ np.r_[linear_velocity, angular_velocity]
-        nullspace = np.eye(7) - inverse @ jacobian
+        # A damped inverse does not yield a true nullspace projector: posture
+        # regularization can leak into the TCP task and leave a sub-mm bias.
+        posture_inverse = (np.linalg.pinv(jacobian, rcond=1e-6)
+                           if phase.position_tolerance < POSITION_TOLERANCE else inverse)
+        nullspace = np.eye(7) - posture_inverse @ jacobian
         joint_velocity += nullspace @ (0.08 * (self.home_q - measured_q))
         maximum = float(np.max(np.abs(joint_velocity)))
         if maximum > CONTROL_RATE:
@@ -372,14 +397,14 @@ class CartesianController:
         ))
         self.max_position_error = max(self.max_position_error, final_position_error)
         if (not phase.wait_for_pose or (
-            final_position_error < POSITION_TOLERANCE
-            and final_orientation_error < ORIENTATION_TOLERANCE
+            final_position_error < phase.position_tolerance
+            and final_orientation_error < phase.orientation_tolerance
         )):
             self.advance(state)
         elif elapsed > phase.duration + 8.0:
             self.hold_q = self.command_q.copy()
             self.failed = (
-                f"{phase.label}: pose error {final_position_error:.3f} m, "
+                f"{phase.label}: pose error {final_position_error:.6f} m, "
                 f"{np.degrees(final_orientation_error):.1f} deg"
             )
 

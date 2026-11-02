@@ -4,7 +4,7 @@ import unittest
 import cv2
 import numpy as np
 
-from simulation.global_camera import DICTIONARY, locate
+from simulation.global_camera import DICTIONARY, locate, select_objects
 
 
 class GlobalCameraTests(unittest.TestCase):
@@ -22,6 +22,11 @@ class GlobalCameraTests(unittest.TestCase):
     def test_blank_frame_has_no_fallback_pose(self):
         estimates, _, _ = locate(self.rgb, self.K, self.T, 0.)
         self.assertEqual(estimates, [])
+
+    def test_mixed_housing_calibration_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'calibrations disagree'):
+            select_objects({'a': {'housing_geometry': 'proxy', 'estimates': []},
+                            'b': {'housing_geometry': 'selected_stl_v1', 'estimates': []}})
 
     def test_known_centred_tag_in_world_coordinates(self):
         self.add_tag()

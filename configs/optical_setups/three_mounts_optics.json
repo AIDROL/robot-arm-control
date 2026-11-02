@@ -1,0 +1,37 @@
+{
+  "assembly_layout_sha256": "069ff03b4a2478fe3c015105c0f83b18f4d16acef8a017f0ba24b21d0a6b4b91",
+  "wavelength_m": 6.328e-07,
+  "input_power_W": 0.001,
+  "waist_radius_m": 0.0008,
+  "source_plane_x_m": -0.2,
+  "detector_plane_x_m": 0.36,
+  "beam_axis_yz_m": [
+    0.35,
+    0.1
+  ],
+  "window_m": 0.006,
+  "grids": [
+    1024,
+    1536,
+    2048
+  ],
+  "elements": {
+    "lens_1": {
+      "focal_length_m": 0.18,
+      "aperture_radius_m": 0.01
+    },
+    "pinhole": {
+      "aperture_radius_m": 7.5e-05
+    },
+    "lens_2": {
+      "focal_length_m": 0.18,
+      "aperture_radius_m": 0.01
+    }
+  },
+  "acceptance": {
+    "min_transmitted_fraction": 0.8,
+    "max_centroid_offset_m": 0.0005,
+    "max_grid_relative_power_difference": 0.02
+  },
+  "assumptions": "Provisional equal-focal-length spatial filter; Gaussian waist at source, paraxial scalar model, no surface imperfections or polarization."
+}

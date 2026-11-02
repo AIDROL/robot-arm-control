@@ -9,16 +9,17 @@ from simulation.global_camera import DICTIONARY
 from simulation.wrist_camera import refine, E_FROM_D
 from simulation.vision_pick_place import WristController
 from simulation.task_space_control import CartesianController, Phase
+from simulation.housing_profile import STL
 
 
 class WristTests(unittest.TestCase):
     def setUp(self):
         self.rgb = np.full((400, 480, 3), 255, np.uint8)
         self.rgb[152:248, 192:288] = cv2.aruco.generateImageMarker(DICTIONARY, 0, 96)[:, :, None]
-        self.depth = np.full((400, 480), .2)
-        self.K = np.array([[800., 0, 239.5], [0, 800., 199.5], [0, 0, 1]])
+        self.depth = np.full((400, 480), .35)
+        self.K = np.array([[1400., 0, 239.5], [0, 1400., 199.5], [0, 0, 1]])
         self.W = np.diag([1., -1., -1., 1.])
-        self.W[2, 3] = 1.0408
+        self.W[2, 3] = 1.1908
         self.coarse = np.eye(4)
         self.coarse[:3, 3] = [.005, -.004, .8]
 
@@ -36,9 +37,25 @@ class WristTests(unittest.TestCase):
         self.assertEqual(r['reason'], 'INVALID_DEPTH')
         self.assertNotIn('T_world_object', r)
 
+    def test_stl_depth_uses_new_marker_to_body_offset(self):
+        W = self.W.copy()
+        W[2, 3] = .35+.814+STL.top_z
+        coarse = self.coarse.copy()
+        coarse[2, 3] = .814
+        result, _ = refine(self.rgb, self.depth, self.K, W, coarse, 0, 1., geometry=STL)
+        self.assertTrue(result['valid'])
+        np.testing.assert_allclose(np.array(result['T_world_object'])[:3, 3], [0, 0, .814], atol=.0001)
+
     def test_wrong_marker_is_rejected(self):
         r, _ = refine(self.rgb, self.depth, self.K, self.W, self.coarse, 1, 1.)
         self.assertEqual(r['reason'], 'FINE_MARKER_NOT_DETECTED')
+
+    def test_d435_near_range_is_rejected(self):
+        r, _ = refine(self.rgb, np.full_like(self.depth, .218),
+                       self.K, self.W, self.coarse, 0, 1.)
+        self.assertFalse(r['valid'])
+        self.assertEqual(r['reason'], 'INVALID_DEPTH')
+        self.assertNotIn('T_world_object', r)
 
     def test_shared_phase_arrays_are_not_corrected_twice(self):
         controller = WristController.__new__(WristController)

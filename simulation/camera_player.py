@@ -10,29 +10,36 @@ from urllib.parse import urlparse
 import cv2
 import numpy as np
 
-TITLE = 'Robot Camera Player'
 VIEWS = [('global_a', 'Global A - RGB'), ('global_b', 'Global B - RGB'),
-         ('wrist_rgb', 'Wrist - RGB'), ('wrist_depth', 'Wrist - depth (0.03-1.0 m)')]
+         ('wrist_rgb', 'Wrist - RGB'), ('wrist_depth', 'Wrist - depth (0.28-1.0 m)'),
+         ('fat_rgb', 'FAT - side marker RGB')]
+TITLES = {key: 'Robot Camera - ' + label for key, label in VIEWS}
 
 
-def compose(frames, status, paused=False):
-    canvas = np.full((824, 1280, 3), (30, 25, 20), np.uint8)
-    for index, (key, label) in enumerate(VIEWS):
-        x, y = (index % 2) * 640, 40 + (index // 2) * 392
-        cv2.putText(canvas, label, (x + 12, y + 23), cv2.FONT_HERSHEY_SIMPLEX, .6,
-                    (230, 230, 230), 1, cv2.LINE_AA)
-        if key in frames:
-            image = cv2.imdecode(np.frombuffer(base64.b64decode(frames[key]), np.uint8), cv2.IMREAD_COLOR)
-            if image is not None:
-                canvas[y+32:y+392, x:x+640] = cv2.resize(image, (640, 360))
+def render_view(key, frames, status, paused=False):
+    """One sensor per image/window; never combine sensor views."""
+    canvas = np.full((412, 640, 3), (30, 25, 20), np.uint8)
     phase = str(status.get('phase', 'Waiting')).split(' · ')[0]
     phase = phase.encode('ascii', errors='ignore').decode().strip() or 'Preparing'
     message = (f"{'PAUSED' if paused else 'LIVE'} | {phase} | "
-               f"t={status.get('simulation_time', 0):.2f}s | frame {status.get('sequence', 0)} "
-               '| SPACE: pause picture | Q/ESC: close player')
-    cv2.putText(canvas, message, (12, 25), cv2.FONT_HERSHEY_SIMPLEX, .48,
+               f"t={status.get('simulation_time', 0):.2f}s | frame {status.get('sequence', 0)}")
+    cv2.putText(canvas, message, (10, 21), cv2.FONT_HERSHEY_SIMPLEX, .43,
                 (160, 235, 180), 1, cv2.LINE_AA)
+    cv2.putText(canvas, 'SPACE: pause pictures | Q/ESC: close all camera windows',
+                (10, 43), cv2.FONT_HERSHEY_SIMPLEX, .4,
+                (220, 220, 220), 1, cv2.LINE_AA)
+    if key in frames:
+        image = cv2.imdecode(np.frombuffer(base64.b64decode(frames[key]), np.uint8), cv2.IMREAD_COLOR)
+        if image is not None:
+            canvas[52:412] = cv2.resize(image, (640, 360))
     return canvas
+
+
+def window_visible(title):
+    try:
+        return cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) >= 1
+    except cv2.error:
+        return False
 
 
 def play(url, output=None, max_seconds=None):
@@ -40,45 +47,60 @@ def play(url, output=None, max_seconds=None):
     if parsed.scheme != 'http' or parsed.hostname != '127.0.0.1':
         raise ValueError('Player accepts only the local simulation monitor URL')
     opener = build_opener(ProxyHandler({}))
-    cv2.namedWindow(TITLE, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(TITLE, 1120, 721)
-    cv2.imshow(TITLE, compose({}, {}))
-    cv2.waitKey(1)
+    active = set(TITLES)
     paused, sequence, displayed = False, -1, 0
     frames, status = {}, {}
     started, next_fetch = time.monotonic(), 0.
-    stats = {'window_visible': bool(cv2.getWindowProperty(TITLE, cv2.WND_PROP_VISIBLE) >= 1),
+    stats = {'window_visible': False, 'window_count': 0,
              'displayed_updates': 0, 'last_sequence': -1}
-    print('Native camera player window opened', flush=True)
     try:
-        while max_seconds is None or time.monotonic() - started < max_seconds:
+        for index, (key, _) in enumerate(VIEWS):
+            title = TITLES[key]
+            cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(title, 640, 412)
+            cv2.moveWindow(title, 20 + index % 3 * 660, 50 + index // 3 * 460)
+            cv2.imshow(title, render_view(key, {}, {}))
+        cv2.waitKey(1)
+        stats.update(window_visible=all(window_visible(t) for t in TITLES.values()),
+                     window_count=sum(window_visible(t) for t in TITLES.values()),
+                     windows=TITLES)
+        print('Five separate native camera windows opened', flush=True)
+        while active and (max_seconds is None or time.monotonic() - started < max_seconds):
+            active = {key for key in active if window_visible(TITLES[key])}
+            if not active:
+                break
             now = time.monotonic()
             if now >= next_fetch and not paused:
                 try:
                     with opener.open(url.rstrip('/') + '/snapshot', timeout=.5) as response:
                         packet = json.load(response)
                     status, frames = packet['status'], packet['frames']
-                    if status['sequence'] != sequence and len(frames) == 4:
-                        canvas = compose(frames, status)
-                        cv2.imshow(TITLE, canvas)
+                    if status['sequence'] != sequence and all(k in frames for k in TITLES):
+                        for key in active:
+                            canvas = render_view(key, frames, status)
+                            cv2.imshow(TITLES[key], canvas)
+                            if output is not None:
+                                output.mkdir(parents=True, exist_ok=True)
+                                cv2.imwrite(str(output / f'camera-player-{key}.jpg'), canvas)
                         sequence = status['sequence']
                         displayed += 1
                         stats.update(displayed_updates=displayed, last_sequence=sequence,
-                                     simulation_time=status['simulation_time'], phase=status['phase'])
+                                     simulation_time=status['simulation_time'], phase=status['phase'],
+                                     window_count=len(active), visible_cameras=sorted(active))
                         if output is not None:
-                            output.mkdir(parents=True, exist_ok=True)
-                            cv2.imwrite(str(output / 'camera-player.jpg'), canvas)
                             (output / 'camera-player-status.json').write_text(json.dumps(stats, indent=2))
-                except (OSError, ValueError, KeyError) as error:
-                    canvas = compose({}, {'phase': 'Connection unavailable - restart simulation'})
-                    cv2.imshow(TITLE, canvas)
+                except (OSError, ValueError, KeyError):
+                    for key in active:
+                        cv2.imshow(TITLES[key], render_view(key, {}, {
+                            'phase': 'Connection unavailable - restart simulation'}))
                 next_fetch = time.monotonic() + .1
             key = cv2.waitKey(15) & 0xff
-            if key in (27, ord('q')) or cv2.getWindowProperty(TITLE, cv2.WND_PROP_VISIBLE) < 1:
+            if key in (27, ord('q')):
                 break
             if key == ord(' '):
                 paused = not paused
-                cv2.imshow(TITLE, compose(frames, status, paused))
+                for camera in active:
+                    cv2.imshow(TITLES[camera], render_view(camera, frames, status, paused))
     finally:
         cv2.destroyAllWindows()
     return stats
