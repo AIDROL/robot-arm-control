@@ -14,6 +14,10 @@ import cv2
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
+try:
+    from . import housing_profile as profiles
+except ImportError:
+    import housing_profile as profiles
 
 try:
     from . import line_assembly as scene
@@ -66,6 +70,16 @@ def configure_vision_scene(spec: mujoco.MjSpec) -> None:
     except ImportError:
         from wrist_camera import add_camera
     add_camera(spec)
+    # Independent close-range RGB camera on the FAT, looking along tool +Y.
+    spec.body('fat').add_camera(name='fat_rgb', pos=[0, scene.FAT_HALF_SIZE[1], .020],
+                                xyaxes=[1, 0, 0, 0, 0, 1], fovy=70)
+    # Tool shafts near the FAT's bottom edge can reach the lower mount holes
+    # without the 90 mm housing entering the workbench. Keep housing dimensions.
+    for label, _, _ in scene.FAT_KEY_OFFSETS:
+        key = spec.geom(f'fat_{label}_key')
+        if key is not None:
+            key.pos[2] -= .025
+        spec.site(f'fat_{label}_key_tip').pos[2] -= .025
     spec.visual.global_.offwidth = WIDTH
     spec.visual.global_.offheight = HEIGHT
     # 4K multisampling can be expensive; detection uses the native output pixels.
@@ -73,8 +87,13 @@ def configure_vision_scene(spec: mujoco.MjSpec) -> None:
     # Keep the 45 g proxies from visibly sinking into the table while pinched.
     # Both interacting geoms use this value (MuJoCo mixes contact parameters).
     spec.geom("workbench").solref = [0.005, 1]
+    selected = spec.numeric('selected_stl_profile') is not None
     for index, (name, _) in enumerate(scene.COMPONENTS):
         body = spec.body(name)
+        if body is None:
+            continue
+        if selected:
+            continue  # STL already includes the original mesh, tags and mount targets.
         spec.geom(f"{name}_collision").solref = [0.005, 1]
         for geom in list(body.geoms):
             if geom.name != f"{name}_collision" and not geom.name.endswith("_screw"):
@@ -99,6 +118,14 @@ def configure_vision_scene(spec: mujoco.MjSpec) -> None:
         yaxis = np.cross(zaxis, xaxis)
         spec.worldbody.add_camera(name=name, pos=position,
                                   xyaxes=[*xaxis, *yaxis], fovy=45)
+
+
+def overview_camera(model):
+    camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultFreeCamera(model, camera)
+    camera.lookat[:] = [0., .22, .88]
+    camera.distance, camera.azimuth, camera.elevation = 1.65, 135, -35
+    return camera
 
 
 def calibration(model, data, camera: str, width: int, height: int):
@@ -184,14 +211,22 @@ def locate(rgb: np.ndarray, K: np.ndarray, world_from_camera: np.ndarray,
 
 def capture_observations(model, data, output: Path, width=WIDTH, height=HEIGHT):
     """Capture images and fixed camera calibration, without object state reads."""
-    marker_plane_z = scene.TABLE_Z + scene.BLOCK_HALF_HEIGHT + TOP_Z
+    geometry = profiles.for_model(model)
+    marker_plane_z = scene.TABLE_Z + geometry.body_height + geometry.top_z
     cameras = {}
     with mujoco.Renderer(model, height=height, width=width) as renderer:
         for camera in CAMERAS:
             K, T = calibration(model, data, camera, width, height)
             start = perf_counter()
-            renderer.update_scene(data, camera=camera)
-            rgb = renderer.render().copy()
+            near=model.vis.map.znear
+            try:
+                # The close FAT view needs a tiny near plane; global cameras
+                # need depth precision between the coplanar fiducial cells.
+                model.vis.map.znear=max(near,.01)
+                renderer.update_scene(data, camera=camera)
+                rgb = renderer.render().copy()
+            finally:
+                model.vis.map.znear=near
             render_time = perf_counter() - start
             start = perf_counter()
             estimates, overlay, rejected = locate(rgb, K, T, marker_plane_z)
@@ -201,6 +236,7 @@ def capture_observations(model, data, output: Path, width=WIDTH, height=HEIGHT):
             cameras[camera] = {
                 "K": K.tolist(), "distortion": [0] * 5, "T_world_camera": T.tolist(),
                 "simulation_time": float(data.time), "render_seconds": render_time,
+                "housing_geometry": geometry.id,
                 "detection_seconds": detection_time, "estimates": estimates,
                 "rejected_candidates": rejected,
             }
@@ -215,6 +251,10 @@ def select_objects(cameras: dict) -> dict:
             if estimate["valid"] and estimate["id"] in observations:
                 observations[estimate["id"]].append((camera, estimate))
     objects = {}
+    geometry_ids = {frame.get('housing_geometry', profiles.PROXY.id) for frame in cameras.values()}
+    if len(geometry_ids) > 1:
+        raise ValueError('Camera housing calibrations disagree')
+    geometry = profiles.from_id(next(iter(geometry_ids), profiles.PROXY.id))
     for index, (name, _) in enumerate(scene.COMPONENTS):
         candidates = observations[index]
         result = {"valid": False, "reason": "MARKER_NOT_DETECTED", "frame_id": "world"}
@@ -228,9 +268,10 @@ def select_objects(cameras: dict) -> dict:
             camera, estimate = min(candidates, key=lambda x: x[1]["reprojection_error_px"])
             T_marker = np.array(estimate["T_world_marker"])
             T_body = T_marker.copy()
-            T_body[:3, 3] -= T_marker[:3, :3] @ np.array([0, 0, TOP_Z])
+            T_body[:3, 3] -= T_marker[:3, :3] @ np.array([0, 0, geometry.top_z])
             valid = bool(conflict <= 0.020 and angle_conflict <= np.deg2rad(15))
             result = {"valid": valid, "reason": "OK" if valid else "CAMERA_CONFLICT",
+                      "housing_geometry": geometry.id,
                       "source_camera": camera, "frame_id": "world",
                       "T_world_object": T_body.tolist(),
                       "camera_position_disagreement_m": conflict,
@@ -254,7 +295,7 @@ def run(seed: int, output: Path, width: int, height: int):
               "side_edge_m": SIDE_EDGE, "cameras": cameras,
               "objects": select_objects(cameras),
               "localization_prior": {"upright": True,
-                  "marker_plane_z_m": scene.TABLE_Z + scene.BLOCK_HALF_HEIGHT + TOP_Z,
+                  "marker_plane_z_m": scene.TABLE_Z + profiles.for_model(model).body_height + profiles.for_model(model).top_z,
                   "source": "configured table and housing dimensions"}}
     # Truth access is isolated here, after all image-derived estimates exist.
     for name, result in report["objects"].items():

@@ -1,0 +1,15 @@
+{
+  "schema_version": "optical-assembly-v1",
+  "experiment_id": "three-mounts-assembly-v1",
+  "description": "Three-component assembly adaptation inspired by the paper's 4f demonstration; optical parameters/propagation are not implemented.",
+  "length_unit": "m",
+  "frame_id": "optical_table",
+  "world_origin_m": [0, 0, 0.760],
+  "components": [
+    {"id": "lens_1", "type": "lens", "inventory_id": "selected_stl_post_v2", "optical_center_m": [-0.180, 0.350, 0.100], "direction_xyz": [-1, 0, 0], "direction_role": "optical_axis"},
+    {"id": "pinhole", "type": "aperture", "inventory_id": "selected_stl_post_v2", "optical_center_m": [0, 0.350, 0.100], "direction_xyz": [-1, 0, 0], "direction_role": "optical_axis"},
+    {"id": "lens_2", "type": "lens", "inventory_id": "selected_stl_post_v2", "optical_center_m": [0.180, 0.350, 0.100], "direction_xyz": [-1, 0, 0], "direction_role": "optical_axis"}
+  ],
+  "connections": [["lens_1", "pinhole"], ["pinhole", "lens_2"]],
+  "optical_validation": "not_run"
+}

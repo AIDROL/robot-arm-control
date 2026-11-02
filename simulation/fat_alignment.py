@@ -46,17 +46,27 @@ def mujoco_quat(rotation: Rotation) -> np.ndarray:
 
 
 class FatAlignmentController(CartesianController):
-    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData):
-        super().__init__(model, data, scene.FAT_TARGET_XS)
+    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData, *,
+                 object_poses=None, assembly_complete=False, visual_alignment=False):
+        if visual_alignment and object_poses is None:
+            raise ValueError('Visual FAT control requires image-derived object poses; truth fallback is forbidden')
+        super().__init__(model, data, scene.target_xs_for_model(model),
+                         object_poses={} if assembly_complete else None)
+        self.object_poses = object_poses
+        self.visual_alignment = visual_alignment
+        self.pending_visual_target = None
+        self.visual_refined = set()
         self.fat_body = model.body("fat").id
+        self.tip_local = np.mean([model.site(f'fat_{label}_key_tip').pos
+                                  for label, *_ in scene.FAT_KEY_OFFSETS], axis=0)
         self.fat_geoms = [
             model.geom("fat_housing").id,
             *(model.geom(f"fat_{label}_key").id
               for label, *_ in scene.FAT_KEY_OFFSETS),
         ]
         self.mount_geoms = {
-            name: model.geom(f"{name}_collision").id
-            for name, _ in scene.COMPONENTS
+            name: scene.component_collision_geoms(model, name)
+            for name, _ in scene.components_for_model(self.model)
         }
         self.table_geom = model.geom("workbench").id
         self.mocap_id = int(model.body_mocapid[self.fat_body])
@@ -75,14 +85,16 @@ class FatAlignmentController(CartesianController):
         self.relative_tip_position = np.zeros(3)
         self.relative_rotation = Rotation.identity()
         self.targets: dict[str, tuple[np.ndarray, Rotation]] = {}
-        self.best_tip_error = {name: float("inf") for name, _ in scene.COMPONENTS}
-        self.best_key_error = {name: float("inf") for name, _ in scene.COMPONENTS}
-        self.best_angle_error = {name: float("inf") for name, _ in scene.COMPONENTS}
+        self.best_tip_error = {name: float("inf") for name, _ in scene.components_for_model(self.model)}
+        self.best_key_error = {name: float("inf") for name, _ in scene.components_for_model(self.model)}
+        self.best_angle_error = {name: float("inf") for name, _ in scene.components_for_model(self.model)}
         self.min_fat_table_clearance = float("inf")
         self.min_fat_mount_clearance = float("inf")
         self.min_fat_neighbor_clearance = float("inf")
         self.min_fat_gripper_clearance = float("inf")
         self.min_clearance_phase = ""
+        if assembly_complete:
+            self.phases = self._pickup_phases(data)
 
     def _gripper_pose_for_tip(
         self, tip: np.ndarray, fat_rotation: Rotation,
@@ -114,32 +126,35 @@ class FatAlignmentController(CartesianController):
             fat_position - grip_position
         )
         self.relative_tip_position = grip_rotation.inv().apply(
-            fat_position + fat_rotation.apply(FAT_TIP_LOCAL) - grip_position
+            fat_position + fat_rotation.apply(self.tip_local) - grip_position
         )
         self.relative_rotation = grip_rotation.inv() * fat_rotation
         self.attached = True
 
     def _alignment_phases(self, state: mujoco.MjData) -> list[Phase]:
         phases: list[Phase] = []
-        for name, _ in scene.COMPONENTS:
-            marker_id = self.model.site(f"{name}_side_marker").id
-            marker_position = state.site_xpos[marker_id]
-            marker_rotation = Rotation.from_matrix(
-                state.site_xmat[marker_id].reshape(3, 3)
-            )
-            # This simulator-ground-truth marker pose stands in for a future
-            # camera estimate; the offset is the fixed marker-to-screw calibration.
-            marker_local_rotation = Rotation.from_euler(
-                "xyz", scene.SIDE_MARKER_EULER
-            )
+        for name, _ in scene.components_for_model(self.model):
+            if self.object_poses is not None:
+                T = self.object_poses[name]
+                marker_position = T[:3, 3] + T[:3, :3] @ self.geometry.side_center
+                marker_rotation = Rotation.from_matrix(T[:3, :3]) * self.geometry.side_rotation
+            else:
+                marker_id = self.model.site(f"{name}_side_marker").id
+                marker_position = state.site_xpos[marker_id]
+                marker_rotation = Rotation.from_matrix(state.site_xmat[marker_id].reshape(3, 3))
+            # Integrated mode uses image-derived body poses; only the legacy
+            # non-visual demonstration reads marker state directly.
+            marker_local_rotation = self.geometry.side_rotation
             mount_rotation = marker_rotation * marker_local_rotation.inv()
             tool_rotation = mount_rotation * Rotation.from_euler(
-                "z", scene.FAT_INSERT_YAW
+                "z", self.geometry.tool_yaw
             )
-            insertion_axis = mount_rotation.apply([1.0, 0.0, 0.0])
-            screw_midpoint = marker_position + mount_rotation.apply(
-                scene.SCREW_MIDPOINT_LOCAL - scene.SIDE_MARKER_LOCAL
-            )
+            insertion_axis = mount_rotation.apply(self.geometry.insert_axis)
+            if self.object_poses is not None:
+                offset = np.array(self.geometry.screw_midpoint) - self.geometry.side_center
+            else:
+                offset = scene.SCREW_MIDPOINT_LOCAL - scene.SIDE_MARKER_LOCAL
+            screw_midpoint = marker_position + mount_rotation.apply(offset)
             tip_goal = screw_midpoint - INSERT_STANDOFF * insertion_axis
             self.targets[name] = (tip_goal.copy(), tool_rotation)
             prealign_tip = tip_goal - PREALIGN_DISTANCE * insertion_axis
@@ -153,6 +168,8 @@ class FatAlignmentController(CartesianController):
                 phases.append(Phase(
                     f"fat {name}: {label}", position, orientation,
                     duration, FAT_GRIP_COMMAND, wait,
+                    position_tolerance=.0005 if self.geometry.is_selected and label != 'travel' else .005,
+                    orientation_tolerance=np.deg2rad(.5 if self.geometry.is_selected else 3.),
                 ))
             add("travel", travel_tip, 3.5)
             add("prealign", prealign_tip, 2.2)
@@ -183,6 +200,11 @@ class FatAlignmentController(CartesianController):
 
     def advance(self, state: mujoco.MjData) -> None:
         finished = self.phase.label
+        if self.visual_alignment and finished.endswith(': prealign'):
+            name = finished[4:].split(':')[0]
+            if name not in self.visual_refined:
+                self.pending_visual_target = name
+                return
         if finished == "park above table":
             self.phases.extend(self._pickup_phases(state))
         elif finished == "fat: close":
@@ -193,6 +215,22 @@ class FatAlignmentController(CartesianController):
             self.attached = False
             self.settle_start_position = state.mocap_pos[self.mocap_id].copy()
             self.settle_start_time = float(state.time)
+        super().advance(state)
+
+    def apply_marker_observation(self, state, name, world_from_marker):
+        mount = world_from_marker.copy()
+        mount[:3, :3] = world_from_marker[:3, :3] @ self.geometry.side_rotation.as_matrix().T
+        mount[:3, 3] = world_from_marker[:3, 3] - mount[:3, :3] @ self.geometry.side_center
+        self.object_poses[name] = mount
+        # Recompute targets from calibrated offsets; replace only the remainder
+        # of this mount's trajectory, leaving other mounts and return unchanged.
+        refined = {p.label: p for p in self._alignment_phases(state)}
+        for index in range(self.phase_index+1, len(self.phases)):
+            label = self.phases[index].label
+            if label.startswith(f'fat {name}:'):
+                self.phases[index] = refined[label]
+        self.visual_refined.add(name)
+        self.pending_visual_target = None
         super().advance(state)
 
     def observe(self, state: mujoco.MjData) -> None:
@@ -236,13 +274,20 @@ class FatAlignmentController(CartesianController):
                 self.phase.label[4:].split(":", 1)[0]
                 if self.phase.label.startswith("fat ") else None
             )
-            for name, mount_geom in self.mount_geoms.items():
-                mount_clearance = min(
-                    mujoco.mj_geomDistance(
-                        self.model, state, fat_geom, mount_geom, 0.2, None
-                    )
-                    for fat_geom in self.fat_geoms
-                )
+            for name, mount_geoms in self.mount_geoms.items():
+                # Sphere lower bounds prune exact distance queries for the many
+                # convex pieces; the safety result still uses actual geometry.
+                a = np.array(self.fat_geoms)
+                b = np.array(mount_geoms)
+                bounds = (np.linalg.norm(state.geom_xpos[a, None]-state.geom_xpos[b], axis=2)
+                          -self.model.geom_rbound[a, None]-self.model.geom_rbound[b])
+                mount_clearance = .2
+                for flat in np.argsort(bounds, axis=None):
+                    i, j = np.unravel_index(flat, bounds.shape)
+                    if bounds[i, j] >= mount_clearance:
+                        break
+                    mount_clearance = min(mount_clearance, mujoco.mj_geomDistance(
+                        self.model, state, int(a[i]), int(b[j]), mount_clearance, None))
                 self.min_fat_mount_clearance = min(
                     self.min_fat_mount_clearance, mount_clearance
                 )
@@ -250,7 +295,8 @@ class FatAlignmentController(CartesianController):
                     self.min_fat_neighbor_clearance = min(
                         self.min_fat_neighbor_clearance, mount_clearance
                     )
-                if mount_clearance < 0.002 and self.failed is None:
+                minimum = .0003 if name == active_name and self.geometry.is_selected else .002
+                if mount_clearance < minimum and self.failed is None:
                     self.hold_q = self.command_q.copy()
                     self.failed = (
                         f"FAT/{name} clearance {mount_clearance:.3f} m "
@@ -265,7 +311,7 @@ class FatAlignmentController(CartesianController):
             state.mocap_quat[self.mocap_id]
         )
         actual_tip = state.mocap_pos[self.mocap_id] + fat_rotation.apply(
-            FAT_TIP_LOCAL
+            self.tip_local
         )
         error = float(np.linalg.norm(actual_tip - target_tip))
         angle = float(np.degrees(np.linalg.norm(
@@ -276,7 +322,7 @@ class FatAlignmentController(CartesianController):
         key_errors = []
         for key_label, x_offset, z_offset in scene.FAT_KEY_OFFSETS:
             key_tip = state.mocap_pos[self.mocap_id] + fat_rotation.apply(
-                [x_offset, scene.FAT_KEY_TIP_Y, z_offset]
+                self.model.site(f'fat_{key_label}_key_tip').pos
             )
             screw = state.site_xpos[
                 self.model.site(f"{name}_{key_label}_screw_center").id

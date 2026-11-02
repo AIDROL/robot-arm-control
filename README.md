@@ -1,6 +1,29 @@
 # Robot Arm Control — xArm7 MuJoCo simulation
 
+Ubuntu 22.04 / Isaac Sim 5.1 迁移请先读 [交接文档](docs/isaac-sim-5.1-handoff.md)：包含拉取与测试命令、模块接口、迁移顺序，以及当前尚未在 Isaac Sim 验证的边界。
+
+The [full Michelson process](docs/michelson-full-process.md) now connects staged visual assembly, achieved-pose base holding, contact FAT adjustment, and LightPipes feedback in one persistent scene. Run `./.venv/bin/python -m simulation.michelson_experiment --output runs/michelson-live --view`. Native scene recordings can be watched with `./.venv/bin/python -m simulation.scene_recording --folder runs/michelson-full-demo --speed 3`; each sensor has its own window. The simpler preassembled benchmark remains available below.
+
+The new [contact FAT / Michelson verification](docs/fat-contact-michelson.md) implements a dynamic, friction-gripped FAT, two motorized hex drivers, contact-driven knobs, and a two-axis mirror feeding a LightPipes interferometer. This is a separate preassembled-fixture benchmark; the original multi-object experiment's FAT stage still uses its geometric proxy. Run:
+
+```bash
+./.venv/bin/python -m simulation.fat_mechanics --michelson --output runs/michelson-demo --view
+```
+
+The verified run reaches 99.87% integrated phase-scan modulation visibility, retaining 99.83% after tool return. This metric is distinct from pinhole transmission. It uses ideal scalar optics, an ideal reference-phase scan, and provisional tool/mount mechanics; it does not assemble a Michelson interferometer from an empty table.
+
 This repository is the robot-arm algorithm and control part of the optics robotics project. The current work runs without physical hardware. Team repository boundaries, ownership, and the contribution workflow are recorded in [docs/project-management.md](docs/project-management.md).
+
+The [three-component layout adapter](docs/optical-layout-adaptation.md) adds posts and bases below the unchanged STL housings, raising the optical axes to 100 mm above the table. Run the simpler JSON-driven assembly → FAT visual alignment → return chain with:
+
+```bash
+./.venv/bin/python -m simulation.experiment --seed 7 \
+  --layout configs/optical_setups/three_mounts.json --output runs/three-post-demo --view
+```
+
+The optional [LightPipes backend](docs/lightpipes-integration.md) now checks Gaussian propagation, thin lenses and pinhole transmission from design and saved actual poses. Add `--optics-spec configs/optical_setups/three_mounts_optics.json` to include it. Magnetic force and catastrophic-failure recovery remain unimplemented in that entry; contact screw-lever actuation is available in the separate Michelson benchmark above. Add `--adjust-optics` for bounded power-guided physical pinhole re-placement; see [position feedback](docs/optical-position-feedback.md). The five-component and single-object vision entries also use the supported geometry by default; older bare-frame checkpoints are incompatible.
+
+With optical validation and `--view`, an additional independent [optical detector window](docs/optical-detector.md) displays the quantized intensity, power, centroid and measurement validity. It updates on newly computed observations and marks held frames explicitly; the optional power-guided adjustment loop publishes a new observation after each physical action.
 
 The [2026-10-28 progress report](docs/progress-2026-10-28.md) covers FAT geometric alignment, dual 4K global vision, wrist RGB-D grasp refinement, and a native four-camera player. To watch the current single-object demonstration, install the requirements and run:
 
@@ -8,9 +31,27 @@ The [2026-10-28 progress report](docs/progress-2026-10-28.md) covers FAT geometr
 ./.venv/bin/python -m simulation.vision_pick_place --seed 7 --output runs/wrist-live-demo --view
 ```
 
-This opens the MuJoCo scene and **Robot Camera Player** with global A/B, wrist RGB and wrist depth. Output directories are numbered automatically on repeated runs. Add `--camera-display browser` for the optional browser dashboard or `--camera-fps 2` for lower preview load. These cameras are ideal simulation proxies; the wrist sensor is not yet a calibrated RealSense D435 model.
+This opens the MuJoCo scene and separate native camera windows: global A, global B, wrist RGB, wrist depth, and FAT RGB. Sensor views are not combined or overlaid on the robot scene. Output directories are numbered automatically on repeated runs. Add `--camera-display browser` for optional per-camera browser pages or `--camera-fps 2` for lower preview load. These cameras are ideal simulation proxies; the wrist sensor is not yet a calibrated RealSense D435 model.
+
+Camera windows now show [OpenCV detection overlays](docs/camera-detection-overlay.md): marker boxes, corners 0–3, IDs, diagnostic pose axes, reprojection errors and simulated calibration parameters. Detection runs at sensor resolution before preview scaling; the depth view reuses the aligned RGB corners. These annotations do not change control inputs or acceptance decisions.
+
+The [integrated experiment entry point](docs/experiment-chain.md) now uses the selected original STL for all five housings (72 × 64 × 108 mm), with flat-face ArUco tags and physical recessed-side grasps. It places the objects in one persistent scene, picks up the FAT proxy, uses its own side-marker RGB observations to refine internal mount targets, and returns the tool:
+
+```bash
+./.venv/bin/python -m simulation.experiment --seed 7 --output runs/experiment-demo --view
+```
+
+The scene opens a fifth independent FAT RGB window. FAT pickup remains kinematic and the tips stop before the holes; physical insertion, screw turning and optical feedback are not simulated. All per-stage evidence and an assembly checkpoint are saved under the run directory.
+
+Final STL placement now turns each housing 90° around world Z so its internal aperture axis follows the X row. Assembly checks both the measured aperture axes and an unobstructed geometric line through the row. Existing checkpoints from the unrotated layout must be reassembled; this geometry check does not simulate optical propagation.
 
 This repository starts with the UFACTORY xArm7 model from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie/tree/main/ufactory_xarm7). The model is a simplified MJCF description under BSD-3-Clause; the real laboratory gripper and calibrated robot parameters still need to be confirmed.
+
+The separate [physical grasp validation](docs/housing-grasp.md) isolates the selected housing at a known pose. Its convex collision pieces preserve the windows and grip recesses; the same physical housing is now used by the vision/FAT experiment. See [STL integration](docs/stl-integration.md) for geometry calibration, verification evidence and remaining limitations. Historical non-vision scenes retain their cuboid proxies.
+
+```bash
+./.venv/bin/python -m simulation.housing_grasp --view
+```
 
 ## macOS Apple Silicon setup
 
@@ -97,6 +138,12 @@ After the five-object coarse assembly, run the scene with a flat fine-alignment-
 The FAT scene widens the target row to 18 cm center spacing, leaving 13 cm between adjacent 5 cm housings. Its slim 36 × 16 × 90 mm body is picked up directly from the table by clamping the left and right side faces above the two tool heads. The arm approaches each housing's marker and adjustment targets from its side, aligns both tool tips, retracts within the gap, then lifts clear before moving to the next housing. It returns the FAT to the table and parks above it. Targets are calculated from each side-marker pose and a fixed marker-to-screw transform. Headless validation checks gripper-to-FAT, FAT-to-table, and FAT-to-housing distances throughout the motion. This is a geometric control demonstration: the FAT is a non-contact visual proxy that follows the gripper after pickup; its camera is represented by a coordinate site, and no markers are decoded from images. The paper shows the FAT and mount schematically but does not give their dimensions; the illustrative sizes and validation limits are in [docs/fat-alignment.md](docs/fat-alignment.md).
 
 ## Current scope
+
+[Placement error diagnostics](docs/placement-error-diagnostics.md) now separate TCP endpoint error, object motion relative to the gripper, and motion during/after opening. Each visual grasp run writes a signed vector budget and diagnostic trace without changing control commands.
+
+The optional [settled placement strategy](docs/placement-settling-comparison.md), enabled with `--placement-strategy settled`, holds the attained TCP pose, requires sustained support contact and stationary motion, then opens the gripper over three seconds. The original `baseline` strategy remains the default for comparison.
+
+Add `--precision` with the settled strategy for [sub-millimetre placement experiments](docs/precision-placement.md): critical TCP phases require 0.3 mm / 0.5° convergence and the posture helper uses a true nullspace projector in those phases. Final object XY error must also be at most 0.5 mm. Two ideal simulation layouts measured 0.267 mm and 0.249 mm; these are not hardware accuracy claims.
 
 The standalone [two-camera 4K vision baseline](docs/global-camera.md) renders real ArUco patterns, detects them from 3840 × 2160 RGB images, and estimates tabletop object poses using a configured height/upright constraint. Run `./.venv/bin/python -m simulation.global_camera --seed 7 --output runs/global-camera-demo`. This scene uses a centered small side tag with both tuning targets below it.
 

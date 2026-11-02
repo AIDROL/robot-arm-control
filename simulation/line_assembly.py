@@ -113,13 +113,13 @@ def motion_duration(q_path: np.ndarray, requested: float) -> float:
 
 def random_start_poses(
     seed: int | None, yaw_range_deg: float,
-    target_xs: tuple[float, ...] = TARGET_XS,
+    target_xs: tuple[float, ...] = TARGET_XS, count: int = len(COMPONENTS),
 ) -> tuple[np.ndarray, np.ndarray]:
     """Sample scattered, separated tabletop poses in a nominal arm work area."""
     rng = np.random.default_rng(seed)
-    targets = np.column_stack((target_xs, np.full(len(COMPONENTS), TARGET_Y)))
+    targets = np.column_stack((target_xs, np.full(len(target_xs), TARGET_Y)))
     positions: list[np.ndarray] = []
-    for _ in COMPONENTS:
+    for _ in range(count):
         for _attempt in range(10000):
             point = np.array([
                 rng.uniform(*SPAWN_X_RANGE), rng.uniform(*SPAWN_Y_RANGE),
@@ -135,7 +135,7 @@ def random_start_poses(
             break
         else:
             raise RuntimeError("Could not fit five separated cubes in the spawn area")
-    yaws = rng.uniform(-np.radians(yaw_range_deg), np.radians(yaw_range_deg), len(COMPONENTS))
+    yaws = rng.uniform(-np.radians(yaw_range_deg), np.radians(yaw_range_deg), count)
     return np.array(positions), yaws
 
 
@@ -144,13 +144,36 @@ def make_scene(
     yaw_range_deg: float = 30, include_fat: bool = False,
     target_xs: tuple[float, ...] = TARGET_XS,
     vision: bool = False,
+    housing_model: str = 'auto',
+    component_names: tuple[str, ...] | None = None,
+    layout_sha256: str | None = None,
+    spec_modifier=None,
+    fixed_components: tuple[str, ...] = (),
+    mount_proxies: bool = True,
+    fat_key_proxies: bool = True,
 ) -> mujoco.MjModel:
     source = menagerie.get("ufactory_xarm7").path() / "scene.xml"
     spec = mujoco.MjSpec.from_file(str(source))
-    source_xy = np.column_stack((SOURCE_SLOT_XS, np.full(len(COMPONENTS), PICKUP_Y)))
-    source_yaw = np.zeros(len(COMPONENTS))
+    use_stl = housing_model in ('stl', 'stl-frame') or (housing_model == 'auto' and vision)
+    if housing_model not in ('auto', 'stl', 'stl-frame', 'proxy'):
+        raise ValueError('housing_model must be auto, stl, stl-frame or proxy')
+    components = COMPONENTS if component_names is None else tuple((n, c) for n, c in COMPONENTS if n in component_names)
+    if component_names is not None and tuple(n for n, _ in components) != tuple(component_names):
+        raise ValueError('Components must use known inventory IDs in inventory order')
+    if len(target_xs) != len(components):
+        raise ValueError('One target X required per component')
+    spec.add_numeric(name='assembly_target_xs', data=list(target_xs))
+    if layout_sha256 is not None:
+        spec.add_numeric(name='assembly_layout_sha256', data=list(bytes.fromhex(layout_sha256)))
+    if use_stl:
+        from .selected_housing import add_housing, add_mount_targets, add_post_base
+        from .housing_profile import STL, STL_FRAME
+        STL = STL_FRAME if housing_model == 'stl-frame' else STL
+        spec.add_numeric(name='selected_stl_profile', data=[2 if STL.support_height else 1])
+    source_xy = np.column_stack((SOURCE_SLOT_XS[:len(components)], np.full(len(components), PICKUP_Y)))
+    source_yaw = np.zeros(len(components))
     if randomize:
-        source_xy, source_yaw = random_start_poses(seed, yaw_range_deg, target_xs)
+        source_xy, source_yaw = random_start_poses(seed, yaw_range_deg, target_xs, len(components))
     # Mount the arm on the table centreline; the target row shares x=0.
     spec.body("link_base").pos = [0, 0, TABLE_Z]
     spec.body("link_base").quat = [np.sqrt(0.5), 0, 0, np.sqrt(0.5)]
@@ -179,19 +202,30 @@ def make_scene(
                 rgba=[0.33, 0.35, 0.38, 1],
             )
 
-    for index, ((name, color), x) in enumerate(zip(COMPONENTS, target_xs)):
+    for index, ((name, color), x) in enumerate(zip(components, target_xs)):
+        marker_id = [n for n, _ in COMPONENTS].index(name)
         world.add_geom(
             name=f"target_{name}", type=mujoco.mjtGeom.mjGEOM_BOX,
-            pos=[x, TARGET_Y, TABLE_Z + 0.001], size=[0.03, 0.03, 0.001],
+            pos=[x, TARGET_Y, TABLE_Z + 0.001],
+            size=[.038, .034, .001] if use_stl else [.03, .03, .001],
+            quat=[np.cos(STL.placement_yaw/2), 0, 0, np.sin(STL.placement_yaw/2)] if use_stl else [1,0,0,0],
             rgba=[*color[:3], 0.6], contype=0, conaffinity=0,
         )
         px, py = source_xy[index]
         yaw = source_yaw[index]
         cube = world.add_body(
-            name=name, pos=[px, py, BLOCK_Z],
+            name=name, pos=[px, py, TABLE_Z+STL.body_height if use_stl else BLOCK_Z],
             quat=[np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)],
         )
-        cube.add_freejoint(name=f"{name}_free")
+        if name not in fixed_components:
+            cube.add_freejoint(name=f"{name}_free")
+        if use_stl:
+            add_housing(spec, cube, name=name, marker_id=marker_id, centered=True, color=color)
+            if STL.support_height:
+                add_post_base(cube, name, STL)
+            if include_fat and mount_proxies:
+                add_mount_targets(spec, cube, name)
+            continue
         cube.add_geom(
             name=f"{name}_collision", type=mujoco.mjtGeom.mjGEOM_BOX,
             size=[BLOCK_HALF_WIDTH, BLOCK_HALF_WIDTH, BLOCK_HALF_HEIGHT],
@@ -270,13 +304,14 @@ def make_scene(
             euler=[-np.pi / 2, 0, 0], size=[0.002],
         )
         for label, x_offset, z_offset in FAT_KEY_OFFSETS:
-            fat.add_geom(
-                name=f"fat_{label}_key", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-                pos=[x_offset, (FAT_HALF_SIZE[1] + FAT_KEY_TIP_Y) / 2, z_offset],
-                euler=[np.pi / 2, 0, 0],
-                size=[0.002, (FAT_KEY_TIP_Y - FAT_HALF_SIZE[1]) / 2],
-                rgba=[0.72, 0.75, 0.78, 1], contype=0, conaffinity=0,
-            )
+            if fat_key_proxies:
+                fat.add_geom(
+                    name=f"fat_{label}_key", type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                    pos=[x_offset, (FAT_HALF_SIZE[1] + FAT_KEY_TIP_Y) / 2, z_offset],
+                    euler=[np.pi / 2, 0, 0],
+                    size=[0.002, (FAT_KEY_TIP_Y - FAT_HALF_SIZE[1]) / 2],
+                    rgba=[0.72, 0.75, 0.78, 1], contype=0, conaffinity=0,
+                )
             fat.add_site(
                 name=f"fat_{label}_key_tip",
                 pos=[x_offset, FAT_KEY_TIP_Y, z_offset], size=[0.001],
@@ -287,7 +322,51 @@ def make_scene(
         except ImportError:
             from global_camera import configure_vision_scene
         configure_vision_scene(spec)
+    if spec_modifier is not None:
+        spec_modifier(spec)
     return spec.compile()
+
+
+def component_collision_geoms(model, name):
+    """All collidable pieces on a component, including fixed internal children."""
+    root = model.body(name).id
+    result = []
+    for geom in range(model.ngeom):
+        if not (model.geom_contype[geom] or model.geom_conaffinity[geom]):
+            continue
+        body = int(model.geom_bodyid[geom])
+        while body and body != root:
+            body = int(model.body_parentid[body])
+        if body == root:
+            result.append(geom)
+    return result
+
+
+def components_for_model(model):
+    return tuple((name, color) for name, color in COMPONENTS
+                 if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) >= 0)
+
+
+def target_xs_for_model(model):
+    index = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_NUMERIC, 'assembly_target_xs')
+    if index < 0:
+        return FAT_TARGET_XS
+    start, size = int(model.numeric_adr[index]), int(model.numeric_size[index])
+    return tuple(model.numeric_data[start:start+size])
+
+
+def target_layout_id(model):
+    from .housing_profile import for_model
+    identity = for_model(model).layout_id
+    index = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_NUMERIC, 'assembly_layout_sha256')
+    if index >= 0:
+        start = int(model.numeric_adr[index])
+        identity += ':' + bytes(int(x) for x in model.numeric_data[start:start+32]).hex()
+    return identity
+
+
+def component_geom_map(model):
+    return {geom: name for name, _ in components_for_model(model) for geom in component_collision_geoms(model, name)}
 
 
 def arm_indices(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:

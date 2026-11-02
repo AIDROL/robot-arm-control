@@ -1,7 +1,7 @@
 """Ideal wrist RGB-D proxy; not a calibrated RealSense D435 sensor model.
 
-Mount/FOV are provisional simulation choices. In particular, this model does
-not implement the D435's resolution-dependent minimum depth or stereo noise.
+Mount remains provisional. RGB FOV and 1280x720 minimum depth are constrained
+to the D435 profile; stereo optics, calibrated intrinsics and noise are omitted.
 Image/depth estimator cannot access object state.
 """
 from pathlib import Path
@@ -9,8 +9,12 @@ from pathlib import Path
 import cv2
 import mujoco
 import numpy as np
+from . import housing_profile as profiles
 
 WIDTH, HEIGHT = 1280, 720
+RGB_VERTICAL_FOV_DEG = 42.5
+MIN_DEPTH_M, MAX_DEPTH_M = .280, 1.0
+PREGRASP_DEPTH_M = .350
 POSITION = np.array([0.065, 0., 0.040])
 back = POSITION - np.array([0., 0., 0.250])
 back /= np.linalg.norm(back)
@@ -24,10 +28,10 @@ E_FROM_D[:3, 3] = POSITION
 
 def add_camera(spec):
     spec.body('xarm_gripper_base_link').add_camera(
-        name='wrist_rgbd', pos=POSITION, xyaxes=[*right, *up], fovy=65)
+        name='wrist_rgbd', pos=POSITION, xyaxes=[*right, *up], fovy=RGB_VERTICAL_FOV_DEG)
 
 
-def refine(rgb, depth, K, world_from_camera, coarse, marker_id, timestamp):
+def refine(rgb, depth, K, world_from_camera, coarse, marker_id, timestamp, geometry=profiles.PROXY):
     from .global_camera import DICTIONARY, TOP_Z
     failure = {"valid": False, "frame_id": "world", "timestamp": timestamp,
                "source_camera": "wrist_rgbd"}
@@ -48,7 +52,7 @@ def refine(rgb, depth, K, world_from_camera, coarse, marker_id, timestamp):
     cv2.fillConvexPoly(mask, np.rint(quad.mean(axis=0) + .6 * (quad - quad.mean(axis=0))).astype(np.int32), 1)
     yy, xx = np.nonzero(mask)
     z = depth[yy, xx]
-    valid = np.isfinite(z) & (z > .03) & (z < 1.)
+    valid = np.isfinite(z) & (z >= MIN_DEPTH_M) & (z < MAX_DEPTH_M)
     count = int(np.sum(valid))
     if count < 50 or count < .6 * len(z):
         return {**failure, 'reason': 'INVALID_DEPTH', 'valid_depth_pixels': count}, overlay
@@ -70,11 +74,11 @@ def refine(rgb, depth, K, world_from_camera, coarse, marker_id, timestamp):
     if abs(denominator) < 1e-6:
         return {**failure, 'reason': 'INVALID_DEPTH_PLANE'}, overlay
     zcentre = float(normal @ centroid / denominator)
-    if not .03 < zcentre < 1.:
+    if not MIN_DEPTH_M <= zcentre < MAX_DEPTH_M:
         return {**failure, 'reason': 'INVALID_DEPTH'}, overlay
     marker_world = world_from_camera[:3, :3] @ (ray * zcentre) + world_from_camera[:3, 3]
     T = np.array(coarse, copy=True)
-    T[:3, 3] = marker_world - T[:3, :3] @ np.array([0, 0, TOP_Z])
+    T[:3, 3] = marker_world - T[:3, :3] @ np.array([0, 0, geometry.top_z])
     delta = float(np.linalg.norm(T[:3, 3] - coarse[:3, 3]))
     cv2.circle(overlay, tuple(np.rint(centre).astype(int)), 5, (0, 0, 255), 2)
     return {**failure, 'valid': delta <= .020,
@@ -92,6 +96,7 @@ def capture(model, data, output: Path, coarse, marker_id, invalid_depth=False):
         renderer.enable_depth_rendering()
         renderer.update_scene(data, camera='wrist_rgbd')
         depth = renderer.render().copy()
+    depth[(depth < MIN_DEPTH_M) | (depth >= MAX_DEPTH_M)] = np.nan
     if invalid_depth:
         depth[:] = np.nan
     focal = HEIGHT / (2 * np.tan(np.deg2rad(model.cam_fovy[model.camera('wrist_rgbd').id]) / 2))
@@ -100,7 +105,9 @@ def capture(model, data, output: Path, coarse, marker_id, invalid_depth=False):
     W_FROM_E = np.eye(4)
     W_FROM_E[:3, :3], W_FROM_E[:3, 3] = tool.xmat.reshape(3, 3), tool.xpos
     W_FROM_D = W_FROM_E @ E_FROM_D
-    result, overlay = refine(rgb, depth, K, W_FROM_D, coarse, marker_id, float(data.time))
+    geometry = profiles.for_model(model)
+    result, overlay = refine(rgb, depth, K, W_FROM_D, coarse, marker_id, float(data.time), geometry)
+    result['housing_geometry'] = geometry.id
     cv2.imwrite(str(output / 'wrist_rgb.png'), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     cv2.imwrite(str(output / 'wrist_detections.png'), overlay)
     np.save(output / 'wrist_depth_m.npy', depth)
@@ -110,6 +117,8 @@ def capture(model, data, output: Path, coarse, marker_id, invalid_depth=False):
                    'T_world_tool': W_FROM_E.tolist(), 'T_world_camera': W_FROM_D.tolist(),
                    'depth_units': 'metres, optical z', 'distortion': [0.] * 5,
                    'sensor_model': 'ideal_rgbd_proxy_not_D435',
+                   'partial_d435_profile': {'depth_resolution': [WIDTH, HEIGHT],
+                       'minimum_depth_m': MIN_DEPTH_M, 'rgb_vertical_fov_deg': RGB_VERTICAL_FOV_DEG},
                    'hand_eye_source': 'configured_exact_simulation_transform_not_measured'})
     return result
 
