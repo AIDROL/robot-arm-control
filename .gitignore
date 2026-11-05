@@ -2,5 +2,12 @@
 __pycache__/
 *.pyc
 .DS_Store
-runs/
+# Keep the verified replay and audit evidence, but not other generated runs.
+runs/*
+!runs/isaac-michelson-final-20261103-006/
+runs/isaac-michelson-final-20261103-006/optics/*/intensity-W-m2.npy
+runs/isaac-michelson-final-20261103-006/console.log
+runs/isaac-michelson-final-20261103-006/*-detection.png
+runs/isaac-michelson-final-20261103-006/camera-optics-dashboard.png
+assets/xarm7_menagerie/assets/*_tmp/
 MUJOCO_LOG.TXT
