@@ -1,0 +1,138 @@
+{
+  "success": true,
+  "checks": {
+    "full_empty_area_execution": true,
+    "controller_completed": true,
+    "no_unsafe_contacts": true,
+    "archived_sources_match": true,
+    "configuration_matches": true,
+    "native_actuator_units": true,
+    "continuous_native_timeline": true,
+    "native_initial_area_is_empty": true,
+    "five_native_placements": true,
+    "released-512_reported_metric_matches_pixels": true,
+    "released-512_is_fresh_after_return": true,
+    "released-512_settled_transmission": true,
+    "released-512_planes_match_native_bodies": true,
+    "released-1024_reported_metric_matches_pixels": true,
+    "released-1024_is_fresh_after_return": true,
+    "released-1024_settled_transmission": true,
+    "released-1024_planes_match_native_bodies": true,
+    "post_return_optics": true,
+    "optical_grid_convergence": true,
+    "native_bilateral_tool_contact": true,
+    "native_shafts_remain_inserted": true,
+    "continuous_seating_monitor": true,
+    "native_bilateral_fat_grip": true,
+    "both_knobs_physically_responded": true,
+    "tool_return": true
+  },
+  "placements": [
+    {
+      "id": "lens_1",
+      "xy_error_m": 0.0007497266701067171,
+      "height_error_m": 1.2874603272372553e-08,
+      "tilt_rad": 3.5793817488743e-07,
+      "max_lift_m": 0.24124701118469238,
+      "min_carry_clearance_m": 0.24034388160705566,
+      "max_grip_gap_m": 0.03780512567719116,
+      "bilateral_fraction": 1.0,
+      "post_latch_drift_m": 0.0,
+      "valid_wrist_metric_depth": true,
+      "success": true
+    },
+    {
+      "id": "pinhole",
+      "xy_error_m": 0.0008783628223413066,
+      "height_error_m": 1.2874603272372553e-08,
+      "tilt_rad": 2.159383408157448e-07,
+      "max_lift_m": 0.24097950553894043,
+      "min_carry_clearance_m": 0.2401819953918457,
+      "max_grip_gap_m": 0.03794784328175525,
+      "bilateral_fraction": 1.0,
+      "post_latch_drift_m": 5.820766091346741e-09,
+      "valid_wrist_metric_depth": true,
+      "success": true
+    },
+    {
+      "id": "lens_2",
+      "xy_error_m": 0.0008999747366568098,
+      "height_error_m": 7.247924804776318e-08,
+      "tilt_rad": 5.975347058702624e-07,
+      "max_lift_m": 0.24109144306182861,
+      "min_carry_clearance_m": 0.24020047283172608,
+      "max_grip_gap_m": 0.03787719362599757,
+      "bilateral_fraction": 1.0,
+      "post_latch_drift_m": 2.9802322387695312e-08,
+      "valid_wrist_metric_depth": true,
+      "success": true
+    },
+    {
+      "id": "beam_splitter",
+      "xy_error_m": 0.0011721252443770756,
+      "height_error_m": 1.2874603272372553e-08,
+      "tilt_rad": 2.384185791015631e-07,
+      "max_lift_m": 0.2409827241897583,
+      "min_carry_clearance_m": 0.2401892671585083,
+      "max_grip_gap_m": 0.037950542141185525,
+      "bilateral_fraction": 1.0,
+      "post_latch_drift_m": 8.585629984736443e-10,
+      "valid_wrist_metric_depth": true,
+      "success": true
+    },
+    {
+      "id": "mirror",
+      "xy_error_m": 0.003457926633503652,
+      "height_error_m": 4.673004150301807e-08,
+      "tilt_rad": 1.6792755826688794e-07,
+      "max_lift_m": 0.24084384536743164,
+      "min_carry_clearance_m": 0.23916895484924316,
+      "max_grip_gap_m": 0.0379673917828444,
+      "bilateral_fraction": 1.0,
+      "post_latch_drift_m": 6.265913434698195e-08,
+      "valid_wrist_metric_depth": true,
+      "success": true
+    }
+  ],
+  "optical_scans_from_raw_pixels": {
+    "released-512": {
+      "grid_size": 512,
+      "valid": true,
+      "visibility": 1.0,
+      "raw_visibility_fit": 1.0000232163012461,
+      "mean_port_power_W": 0.0004997904626111868,
+      "phase_scan_power_W": [
+        0.00017677424128089957,
+        0.0005410697682640361,
+        0.0008811915176378797,
+        0.0009978870855476799,
+        0.0008228031041157041,
+        0.00045850396820252306,
+        0.0001183890874374738,
+        1.7049284032983332e-06
+      ]
+    },
+    "released-1024": {
+      "grid_size": 1024,
+      "valid": true,
+      "visibility": 1.0,
+      "raw_visibility_fit": 1.0000262258552417,
+      "mean_port_power_W": 0.0004998282836159681,
+      "phase_scan_power_W": [
+        0.0001767876874557429,
+        0.0005411146761596709,
+        0.0008812578171753109,
+        0.0009979626111401442,
+        0.0008228676865009366,
+        0.0004585385149764172,
+        0.00011839246353332192,
+        1.7048119862001224e-06
+      ]
+    }
+  },
+  "bilateral_socket_fraction": 0.22626666666666667,
+  "fat_return_error_m": 0.0037607286422898585,
+  "time_s": 240.8,
+  "raw_grid_visibility_difference": 3.0095539955699024e-06,
+  "scope": "independent saved-native-state/contact and quantized detector-image audit; ideal scalar optics assumptions remain"
+}

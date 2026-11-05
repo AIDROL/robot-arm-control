@@ -1,0 +1,20 @@
+{
+  "source_sha256": {
+    "isaac_michelson.py": "d44ef2df3d6554486099b0219641f1c4f278f864efed8f2d2bb8808a695afd2d",
+    "isaac_michelson_backend.py": "5b40bbc4ede05eb299c213bbc6717f66cc89477cb86d7822269876fd8438836a",
+    "isaac_michelson_control.py": "37293f9c91c34fe205e62239c321bf805176e033df72fd6eb4a721199deda126",
+    "michelson_assembly_optics.py": "1ba097b745a4167f9c5535711f9f858ab95983bc6f3c91f75f19eb70f349fcde",
+    "michelson_experiment.py": "f2295ad27f8f8249c186d9887ecd0ea4b0b78d44c44f11454af1536cac576fdf",
+    "fat_mechanics.py": "2ca8e24b708c63b323a802663c2b2fa22f526963e49e2be457b391104fe87579"
+  },
+  "configuration_sha256": "05f39467ee0781e4647a5ce00ee5caa82bebfd3aefb0ab219432a940c75a40ec",
+  "source_roles": "MuJoCo asset compiler / kinematics only; native PhysX dynamics, contacts, state and Isaac images",
+  "mechanics": "source geometry/inertia and finite-force drives; PhysX mimic screw-lever; passive elasto-plastic knob friction",
+  "argv": [
+    "simulation/isaac_michelson.py",
+    "--output",
+    "runs/isaac-michelson-final-20261103-006",
+    "--stage",
+    "full"
+  ]
+}
