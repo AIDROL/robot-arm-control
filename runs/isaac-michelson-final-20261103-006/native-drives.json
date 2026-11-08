@@ -1,0 +1,158 @@
+{
+  "link_base": {
+    "joint1": {
+      "kp": 1500.0,
+      "kd": 160.0,
+      "max_effort": 50.0,
+      "armature": 0.10000000149011612
+    },
+    "joint2": {
+      "kp": 1500.0,
+      "kd": 160.0,
+      "max_effort": 50.0,
+      "armature": 0.10000000149011612
+    },
+    "joint3": {
+      "kp": 1000.0,
+      "kd": 105.0,
+      "max_effort": 30.0,
+      "armature": 0.10000000149011612
+    },
+    "joint4": {
+      "kp": 1000.0,
+      "kd": 105.0,
+      "max_effort": 30.0,
+      "armature": 0.10000000149011612
+    },
+    "joint5": {
+      "kp": 1000.0,
+      "kd": 105.0,
+      "max_effort": 30.0,
+      "armature": 0.10000000149011612
+    },
+    "joint6": {
+      "kp": 800.0,
+      "kd": 82.0,
+      "max_effort": 20.0,
+      "armature": 0.10000000149011612
+    },
+    "joint7": {
+      "kp": 800.0,
+      "kd": 82.0,
+      "max_effort": 20.0,
+      "armature": 0.10000000149011612
+    },
+    "left_driver_joint": {
+      "kp": 50.0,
+      "kd": 5.0,
+      "max_effort": 25.0,
+      "armature": 0.004999999888241291
+    },
+    "left_inner_knuckle_joint": {
+      "kp": 0.05000000074505806,
+      "kd": 0.0012499999720603228,
+      "max_effort": 1000000.0,
+      "armature": 0.10000000149011612
+    },
+    "right_driver_joint": {
+      "kp": 50.0,
+      "kd": 5.0,
+      "max_effort": 25.0,
+      "armature": 0.004999999888241291
+    },
+    "right_inner_knuckle_joint": {
+      "kp": 0.05000000074505806,
+      "kd": 0.0012499999720603228,
+      "max_effort": 1000000.0,
+      "armature": 0.10000000149011612
+    },
+    "left_finger_joint": {
+      "kp": 0.0,
+      "kd": 0.0,
+      "max_effort": 0.0,
+      "armature": 0.10000000149011612
+    },
+    "right_finger_joint": {
+      "kp": 0.0,
+      "kd": 0.0,
+      "max_effort": 0.0,
+      "armature": 0.10000000149011612
+    }
+  },
+  "mirror": {
+    "mirror_pitch": {
+      "kp": 0.0,
+      "kd": 2.0000001313746907e-05,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "lower_knob_joint": {
+      "kp": 1.0,
+      "kd": 2.0000001313746907e-05,
+      "max_effort": 0.0003000000142492354,
+      "armature": 1.0000000116860974e-07
+    },
+    "upper_knob_joint": {
+      "kp": 1.0,
+      "kd": 2.0000001313746907e-05,
+      "max_effort": 0.0003000000142492354,
+      "armature": 1.0000000116860974e-07
+    },
+    "mirror_yaw": {
+      "kp": 0.0,
+      "kd": 2.0000001313746907e-05,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    }
+  },
+  "fat": {
+    "lower_float_x": {
+      "kp": 200.0,
+      "kd": 0.05000000074505806,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "upper_float_x": {
+      "kp": 200.0,
+      "kd": 0.05000000074505806,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "lower_float_y": {
+      "kp": 50.0,
+      "kd": 0.05000000074505806,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "upper_float_y": {
+      "kp": 50.0,
+      "kd": 0.05000000074505806,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "lower_float_z": {
+      "kp": 200.0,
+      "kd": 0.05000000074505806,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "upper_float_z": {
+      "kp": 200.0,
+      "kd": 0.05000000074505806,
+      "max_effort": 1000000.0,
+      "armature": 0.0
+    },
+    "lower_motor_joint": {
+      "kp": 0.029999999329447746,
+      "kd": 0.00011000000085914508,
+      "max_effort": 0.0020000000949949026,
+      "armature": 9.999999974752427e-07
+    },
+    "upper_motor_joint": {
+      "kp": 0.029999999329447746,
+      "kd": 0.00011000000085914508,
+      "max_effort": 0.0020000000949949026,
+      "armature": 9.999999974752427e-07
+    }
+  }
+}

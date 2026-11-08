@@ -1,5 +1,7 @@
 # Ubuntu / Isaac Sim 5.1 迁移交接（2026-11-02）
 
+此文档保留迁移前的模块路径和计划；当前实现已分为 `simulation/isaac/` 与 `simulation/mujoco/`，旧路径有兼容入口。已验收实验和画面入口见 [Isaac 验证](isaac-michelson-validation-2026-11-03.md)与[相机/调光查看](isaac-camera-optics-view.md)。
+
 ## 当前基线与目标
 
 当前源码位于 GitHub `AIDROL/robot-arm-control` 的 `vision-grasp-camera-player` 分支。现有仿真在 **MuJoCo 3.16 + Python 3.11** 上实现了视觉抓放、五器件 Michelson 装配、FAT 物理接触调节和 LightPipes 光学反馈。Ubuntu 上的第一阶段目标是重建**最小视觉闭环**：Isaac Sim 图像 → ROS 2 → OpenCV ArUco 位姿 → 机械臂接近 → 新图像复测。不要把已有 MuJoCo 代码当作可直接在 Isaac Sim 执行的控制脚本。

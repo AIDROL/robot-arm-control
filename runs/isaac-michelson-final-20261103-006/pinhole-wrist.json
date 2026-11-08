@@ -1,0 +1,39 @@
+{
+  "valid": true,
+  "frame_id": "world",
+  "timestamp": 38.902,
+  "source_camera": "wrist_rgbd",
+  "reason": "OK",
+  "T_world_object": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      -0.15027011619667482
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.49978826269979215
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.8739176804711658
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "valid_depth_pixels": 1463,
+  "plane_inliers": 1463,
+  "centre_depth_m": 0.35019309413774663,
+  "correction_m": 0.0006385222941762964,
+  "position_source": "rendered_metric_depth",
+  "orientation_source": "retained_global_yaw"
+}

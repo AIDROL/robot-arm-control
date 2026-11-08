@@ -1,8 +1,28 @@
-# Robot Arm Control — xArm7 MuJoCo simulation
+# Robot Arm Control — xArm7 optics simulation (MuJoCo / Isaac Sim)
 
-Ubuntu 22.04 / Isaac Sim 5.1 迁移请先读 [交接文档](docs/isaac-sim-5.1-handoff.md)：包含拉取与测试命令、模块接口、迁移顺序，以及当前尚未在 Isaac Sim 验证的边界。
+Ubuntu 22.04 / Isaac Sim 5.1 的原始迁移背景、模块接口与交接步骤见 [交接文档](docs/isaac-sim-5.1-handoff.md)，本机最新验收结果见下文。
 
-The [full Michelson process](docs/michelson-full-process.md) now connects staged visual assembly, achieved-pose base holding, contact FAT adjustment, and LightPipes feedback in one persistent scene. Run `./.venv/bin/python -m simulation.michelson_experiment --output runs/michelson-live --view`. Native scene recordings can be watched with `./.venv/bin/python -m simulation.scene_recording --folder runs/michelson-full-demo --speed 3`; each sensor has its own window. The simpler preassembled benchmark remains available below.
+本机 Ubuntu / Isaac Sim 5.1 已完成 [Michelson 原生全流程验收](docs/isaac-michelson-validation-2026-11-03.md)：从空实验区物理装配五件器件、FAT 接触调镜、工具归还，以及归还后的新光学测量与独立审计。最终记录为 `runs/isaac-michelson-final-20261103-006`；当前 92 项测试通过。光学仍采用理想 LightPipes 模型和暂定机构参数。初始 ROS 2 图像与机械臂导入基线见 [Ubuntu 迁移记录](docs/ubuntu-isaac-migration-2026-11-03.md)。
+
+在 Isaac 中可通过下面的三维 replay 查看完整轨迹并自由调整视角。仓库包含这次验收所需的轨迹、场景、相机采样、探测器图像和审计记录；大型中间光强数组和其他运行目录保留在生成它们的机器上，不纳入 Git。相机与光学监视器独立计时，手动启动时与三维 replay 不保证逐帧同步。[同步展示视频](docs/michelson-replay-presentation.md)可按需在本机导出，不随仓库分发。
+
+```bash
+cd ~/Desktop/workspace/robot-arm-control  # or your clone directory
+# Run a new native experiment (output directory must be new); add --view for the Isaac window.
+bash simulation/isaac/run_isaac_michelson.sh --output runs/isaac-new-run --stage full --view
+# View the verified native trajectory without rerunning physics.
+bash simulation/isaac/run_isaac_michelson_replay.sh --folder runs/isaac-michelson-final-20261103-006 --speed 2
+# View archived control-camera captures and phase-scanned optical measurements.
+./.venv/bin/python simulation/isaac/camera_optics_monitor.py --folder runs/isaac-michelson-final-20261103-006 --replay --speed 2
+```
+
+启动脚本默认从 `~/Documents/isaacsim/isaac-sim-standalone-5.1.0-linux-x86_64/python.sh` 查找 Isaac Sim。安装在其他位置时，先设置 `export ISAAC_SIM_PYTHON=/path/to/isaac-sim/python.sh`。这些回放读取已保存的验收记录，不重新运行物理控制或生成新的验收结果。
+
+Backend implementations now live under `simulation/isaac/` and `simulation/mujoco/`; shared LightPipes optics and detector code remain in `simulation/`. The former top-level Python and shell entry points are compatibility launchers. The Isaac run reads the pinned MJCF as source geometry and kinematics but uses PhysX for motion, contacts, state, and camera rendering. For camera timestamps, recorded detector frames, and live viewing commands, see [Isaac camera and optics viewer](docs/isaac-camera-optics-view.md).
+
+With `--view`, a separate renderer displays the latest native PhysX state at a target 30 FPS and produces continuous 640×360 global, wrist RGB-D, and FAT-side previews at 5 Hz. All three preview cameras produce initial frames before arm motion starts. Open `camera_optics_monitor.py --folder <active-run>` without `--replay` to follow them. The display uses 100 ms interpolation; physical simulation can progress slower than wall time, as shown in the live window. High-resolution control captures and optical acceptance still use the native worker's original pipeline.
+
+The MuJoCo [full Michelson process](docs/michelson-full-process.md) connects staged visual assembly, achieved-pose base holding, contact FAT adjustment, and LightPipes feedback in one persistent scene. Run `./.venv/bin/python -m simulation.michelson_experiment --output runs/michelson-live --view`. Native scene recordings can be watched with `./.venv/bin/python -m simulation.scene_recording --folder runs/michelson-full-demo --speed 3`; each sensor has its own window. The simpler preassembled benchmark remains available below.
 
 The new [contact FAT / Michelson verification](docs/fat-contact-michelson.md) implements a dynamic, friction-gripped FAT, two motorized hex drivers, contact-driven knobs, and a two-axis mirror feeding a LightPipes interferometer. This is a separate preassembled-fixture benchmark; the original multi-object experiment's FAT stage still uses its geometric proxy. Run:
 
@@ -149,4 +169,4 @@ The standalone [two-camera 4K vision baseline](docs/global-camera.md) renders re
 
 The [single-object visual grasp demonstration](docs/vision-pick-place.md) passes those image-derived poses into the Cartesian controller: `./.venv/bin/python -m simulation.vision_pick_place --seed 7 --output runs/visual-grasp-demo`. It physically grasps and places one housing and checks contact, lift, transport and stable release. The default now includes [wrist RGB-D refinement](docs/wrist-rgbd.md) at pregrasp; use `--coarse-only` for the historical global-only baseline. Add `--record-gif` for an animation, `--hide-target-marker` to verify rejection before motion, or `--invalid-wrist-depth` to verify rejection before descent. Continuous visual servoing remains future work.
 
-The single-joint demonstration is the M1 control baseline. The line assembly adds Cartesian feedback control and object handling, and the FAT scene adds tool approach and side-target alignment. Those motion demonstrations do not yet consume image-based localization. General obstacle avoidance, real camera calibration, screw actuation, optical feedback, and real robot commands remain outside the current scope. The Menagerie gripper should not be assumed to match the laboratory end effector.
+The single-joint demonstration is the M1 control baseline. The original line assembly adds Cartesian feedback control and object handling, and its FAT scene adds geometric tool approach and side-target alignment. Those original motion demonstrations do not consume image-based localization. The full Michelson entries documented above add image-derived assembly, contact screw actuation and simulated optical feedback. General obstacle avoidance, real camera calibration and real robot commands remain outside the verified scope. The Menagerie gripper should not be assumed to match the laboratory end effector.

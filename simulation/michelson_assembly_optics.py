@@ -48,6 +48,24 @@ def from_state(model,data,n=256,capture_folder=None,config=None):
     for role,name in ROLES.items():
         site=data.site(name+'_optical_axis');T=np.eye(4)
         T[:3,:3]=site.xmat.reshape(3,3);T[:3,3]=site.xpos;poses[role]=T
+    return from_poses(poses,n=n,capture_folder=capture_folder,config=config)
+
+
+def from_poses(poses,n=256,capture_folder=None,config=None):
+    """Engine-independent optical plant fed by achieved optical-plane poses.
+
+    Inputs must be measured simulation/hardware geometry. Design-pose fixtures
+    belong only in tests, never as a fallback after a failed placement.
+    """
+    if set(poses) != set(ROLES):
+        raise ValueError('OPTICAL_ROLE_SET_MISMATCH')
+    for role,value in poses.items():
+        T=np.asarray(value,dtype=float)
+        if (T.shape!=(4,4) or not np.isfinite(T).all()
+            or not np.allclose(T[3],[0,0,0,1],atol=1e-9)
+            or not np.allclose(T[:3,:3].T@T[:3,:3],np.eye(3),atol=1e-6)
+            or abs(np.linalg.det(T[:3,:3])-1)>1e-6):
+            raise ValueError('INVALID_OPTICAL_PLANE:'+role)
     try:paths=trace(poses)
     except ValueError as error:
         return {'valid':False,'visibility':0.,'reason':str(error),'phase_scan_power_W':[],
