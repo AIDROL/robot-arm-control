@@ -49,7 +49,14 @@ def make_scene(config,targets):
             name=item['id'];body=spec.body(name)
             body.pos=[(-.3+.15*index),.50,.874];body.quat=[1,0,0,0]
             if name!='mirror':add_mount_targets(spec,body,name)
-            if name!='mirror':
+            if item['role'] in ('laser', 'detector'):
+                from simulation.optical_device_visuals import add_mjcf_device
+                add_mjcf_device(body, name, item['role'], config['detector_window_m'])
+                # Hide obsolete generic mirror-mount visuals; retain every
+                # collision shape and its original physical parameters.
+                for proxy in spec.body(name+'_internal_frame').geoms:
+                    proxy.rgba[3] = 0.
+            elif name!='mirror':
                 colors={'laser':[.3,.05,.05,1.],'splitter':[.3,.8,1.,.35],
                     'reference_mirror':[.8,.85,.9,1.],'detector':[.03,.03,.03,1.]}
                 body.add_geom(name=name+'_optical_face',type=mujoco.mjtGeom.mjGEOM_CYLINDER,

@@ -299,7 +299,7 @@ class IsaacMechanics:
             if scale is not None:
                 UsdGeom.Xformable(geom).AddScaleOp().Set(Gf.Vec3f(*map(float, scale)))
             rgba = m.geom_rgba[i].copy()
-            if m.geom_matid[i] >= 0:
+            if m.geom_matid[i] >= 0 and m.geom(i).name != "floor":
                 rgba = m.mat_rgba[m.geom_matid[i]].copy()
             geom.CreateDisplayColorAttr([Gf.Vec3f(*map(float, rgba[:3]))])
             # Contact decomposition is invisible; source visuals retain the STL.
