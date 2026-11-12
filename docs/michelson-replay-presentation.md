@@ -1,6 +1,6 @@
-# Michelson 同步展示版 replay
+# Michelson 可选同步视频导出
 
-最终展示使用已通过独立审计的 `runs/isaac-michelson-final-20261103-006`。它包含从空实验区开始的五件装配、FAT 抓取与插入、接触调镜、退出归还、归还后两种网格的新光学测量。原始物理过程长 240.846 秒；默认展示为 2 倍速、30 FPS，结尾额外停留 3 秒，整段约 2 分 3 秒。
+可选视频导出使用已通过独立审计的 `runs/isaac-michelson-final-20261103-006`。它包含从空实验区开始的五件装配、FAT 抓取与插入、接触调镜、退出归还、归还后两种网格的新光学测量。原始物理过程长 240.846 秒；默认导出为 2 倍速、30 FPS，结尾额外停留 3 秒，整段约 2 分 3 秒。需要在 Isaac 内自由调整视角时，使用本文末尾的三维 replay 入口；该入口的显示设置和相机切换说明见 [Isaac 相机与调光画面](isaac-camera-optics-view.md)。
 
 ## 一条命令播放
 
@@ -42,7 +42,7 @@ bash simulation/isaac/export_michelson_presentation.sh \
 
 ```bash
 bash simulation/isaac/run_isaac_michelson_replay.sh \
-  --folder runs/isaac-michelson-final-20261103-006 --speed 2
+  --folder runs/isaac-michelson-final-20261103-006 --speed 4
 ```
 
-该入口是三维轨迹查看器；正式完整多相机展示采用上面的同步电影播放器。
+该 Isaac 入口用于交互三维展示，默认 4 倍速，完整流程约 60 秒；窗口支持 1 / 2 / 4 / 8 倍速、暂停/继续、从头播放、前后 10 秒，以及 Overview / Global / Wrist / FAT 相机按钮和自由视角。结束后场景保持打开，便于继续观察；需要自动关闭时可加 `--exit-after 3`。上面的电影播放器用于固定画面的可选导出展示，其默认速度仍为 2 倍。

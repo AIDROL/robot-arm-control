@@ -7,11 +7,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import sys
 import time
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from simulation.isaac.live_stream import request_camera_previews
 
 
 TILE_W, TILE_H = 640, 360
@@ -191,6 +196,7 @@ def main():
     parser.add_argument("--start-seconds", type=float, default=0.)
     parser.add_argument("--snapshot", type=Path, help="Save current dashboard image")
     parser.add_argument("--no-window", action="store_true", help="Write one snapshot and exit")
+    parser.add_argument("--max-seconds", type=float, help="Bounded monitor verification")
     args = parser.parse_args()
     if args.speed <= 0:
         parser.error("--speed must be positive")
@@ -206,12 +212,20 @@ def main():
     start_wall = time.monotonic()
     paused_at = None
     selected = None
+    preview_lease = None
+    last_preview_request = 0.
+    monitor_started = time.monotonic()
     channels = {"1": ("global", "Global RGB / top camera"),
                 "2": ("wrist", "Wrist RGB-D / depth inset"),
                 "3": ("side", "FAT side RGB"),
                 "4": ("detector", "LightPipes detector / phase 0")}
     try:
         while True:
+            if args.max_seconds is not None and time.monotonic()-monitor_started >= args.max_seconds:
+                break
+            if not args.replay and not args.no_window and (folder/"live/cameras.json").exists() and time.monotonic()-last_preview_request >= .5:
+                preview_lease = request_camera_previews(folder/"live", os.getpid())
+                last_preview_request = time.monotonic()
             streams = observations(folder, include_live=not args.replay)
             stamps = [row[0] for rows in streams.values() for row in rows]
             if args.replay:
@@ -235,7 +249,7 @@ def main():
                 panel = tile(latest(streams[stream], now), label, now, detector=stream == "detector")
                 display = cv2.resize(panel, (1280, 720), interpolation=cv2.INTER_LINEAR)
             cv2.imshow(title, display)
-            key = cv2.waitKey(150) & 255
+            key = cv2.waitKey(15) & 255
             if key in (27, ord("q")):
                 return
             if key in (ord("0"), ord("1"), ord("2"), ord("3"), ord("4")):
@@ -247,6 +261,8 @@ def main():
                     start_wall = time.monotonic() - (paused_at - args.start_seconds) / args.speed
                     paused_at = None
     finally:
+        if preview_lease:
+            preview_lease.unlink(missing_ok=True)
         if not args.no_window:
             cv2.destroyAllWindows()
 

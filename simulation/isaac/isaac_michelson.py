@@ -14,6 +14,9 @@ sys.path.insert(0, str(ROOT))
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--view", action="store_true", help="Independent smooth live renderer and continuous preview cameras")
+parser.add_argument("--view-fps", type=float, default=60., help="Live viewport frame rate target")
+parser.add_argument("--camera-fps", type=float, default=15., help="Live camera preview publication rate")
+parser.add_argument("--preview-width", type=int, default=480, help="Live camera preview width")
 parser.add_argument("--stage", choices=("settle", "grip", "pick", "assembly", "full"), default="full")
 parser.add_argument("--component", choices=("lens_1", "pinhole", "lens_2", "beam_splitter", "mirror"), default="lens_1")
 parser.add_argument("--seconds", type=float, default=1.)
@@ -25,12 +28,15 @@ if not 0 < args.dt <= 1 / 120:
     parser.error("--dt must be positive and no larger than 1/120 s")
 if not 1 <= args.feedback_actions <= 60:
     parser.error("--feedback-actions must be between 1 and 60")
+if args.view_fps <= 0 or args.camera_fps <= 0 or args.preview_width < 160:
+    parser.error("--view-fps and --camera-fps must be positive")
 args.output = args.output.resolve()
 args.output.mkdir(parents=True, exist_ok=False)
 sources = (("isaac_michelson.py", "isaac"), ("isaac_michelson_backend.py", "isaac"),
            ("isaac_michelson_control.py", "isaac"), ("michelson_assembly_optics.py", ""),
            ("michelson_experiment.py", "mujoco"), ("fat_mechanics.py", "mujoco"),
-           ("live_stream.py", "isaac"), ("isaac_michelson_live.py", "isaac"))
+           ("live_stream.py", "isaac"), ("isaac_michelson_live.py", "isaac"),
+           ("display_rendering.py", "isaac"), ("optical_device_visuals.py", ""))
 (args.output / "source").mkdir()
 for name, backend in sources:
     (args.output / "source" / name).write_bytes((ROOT / "simulation" / backend / name).read_bytes())
@@ -72,7 +78,8 @@ try:
             raise RuntimeError("ISAAC_PYTHON_LAUNCHER_NOT_FOUND")
         live_log = (args.output / "live-view.log").open("w")
         live_process = subprocess.Popen([str(launcher), str(ROOT / "simulation/isaac/isaac_michelson_live.py"),
-                                         "--folder", str(args.output)], stdout=live_log, stderr=subprocess.STDOUT,
+                                         "--folder", str(args.output), "--fps", str(args.view_fps),
+                                         "--camera-fps", str(args.camera_fps), "--preview-width", str(args.preview_width)], stdout=live_log, stderr=subprocess.STDOUT,
                                         start_new_session=True)
         deadline = time.monotonic() + 90.
         while not (mechanics.live_folder / "ready.json").exists():

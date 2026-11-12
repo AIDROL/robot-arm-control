@@ -24,6 +24,27 @@ def write_state(folder, names, poses, simulation_time, phase):
     temporary.replace(folder / "state.npz")
 
 
+def request_camera_previews(live_folder, consumer_id):
+    """A monitor renews its own lease; separate IDs permit multiple monitors."""
+    folder = Path(live_folder)/"preview-consumers"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder/(str(consumer_id)+".json")
+    write_json(path, {"wall_time_s": time.monotonic()})
+    return path
+
+
+def camera_previews_requested(live_folder, now=None):
+    now = time.monotonic() if now is None else now
+    for path in (Path(live_folder)/"preview-consumers").glob("*.json"):
+        try:
+            age = now-float(json.loads(path.read_text())["wall_time_s"])
+            if 0 <= age < 2.:
+                return True
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return False
+
+
 class DisplayBuffer:
     """Interpolate recent observed poses; clamp rather than predict future motion."""
     def __init__(self, delay=.10):

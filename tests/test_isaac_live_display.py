@@ -5,11 +5,25 @@ import unittest
 
 import numpy as np
 from scipy.spatial.transform import Rotation
-from simulation.isaac.live_stream import DisplayBuffer
+from simulation.isaac.live_stream import DisplayBuffer, request_camera_previews, camera_previews_requested
 from simulation.isaac.camera_optics_monitor import observations
 
 
 class LiveDisplayTests(unittest.TestCase):
+    def test_monitor_leases_enable_preview_only_while_consumed(self):
+        with TemporaryDirectory() as folder:
+            self.assertFalse(camera_previews_requested(folder))
+            first = request_camera_previews(folder, "one")
+            stamp = json.loads(first.read_text())["wall_time_s"]
+            self.assertTrue(camera_previews_requested(folder, stamp+.5))
+            second = request_camera_previews(folder, "two")
+            first.unlink()
+            self.assertTrue(camera_previews_requested(folder))
+            second.write_text(json.dumps({"wall_time_s": stamp-3.}))
+            self.assertFalse(camera_previews_requested(folder, stamp))
+            second.write_text("incomplete")
+            self.assertFalse(camera_previews_requested(folder, stamp))
+
     def test_interpolation_uses_observed_motion_and_never_extrapolates(self):
         buffer = DisplayBuffer(delay=.1)
         for wall, position, degrees in ((10., 0., 0.), (11., 2., 90.)):

@@ -2,7 +2,7 @@
 
 Ubuntu 22.04 / Isaac Sim 5.1 的原始迁移背景、模块接口与交接步骤见 [交接文档](docs/isaac-sim-5.1-handoff.md)，本机最新验收结果见下文。
 
-本机 Ubuntu / Isaac Sim 5.1 已完成 [Michelson 原生全流程验收](docs/isaac-michelson-validation-2026-11-03.md)：从空实验区物理装配五件器件、FAT 接触调镜、工具归还，以及归还后的新光学测量与独立审计。最终记录为 `runs/isaac-michelson-final-20261103-006`；当前 92 项测试通过。光学仍采用理想 LightPipes 模型和暂定机构参数。初始 ROS 2 图像与机械臂导入基线见 [Ubuntu 迁移记录](docs/ubuntu-isaac-migration-2026-11-03.md)。
+本机 Ubuntu / Isaac Sim 5.1 已完成 [Michelson 原生全流程验收](docs/isaac-michelson-validation-2026-11-03.md)：从空实验区物理装配五件器件、FAT 接触调镜、工具归还，以及归还后的新光学测量与独立审计。最终记录为 `runs/isaac-michelson-final-20261103-006`；当前 105 项测试通过。光学仍采用理想 LightPipes 模型和暂定机构参数。初始 ROS 2 图像与机械臂导入基线见 [Ubuntu 迁移记录](docs/ubuntu-isaac-migration-2026-11-03.md)。
 
 在 Isaac 中可通过下面的三维 replay 查看完整轨迹并自由调整视角。仓库包含这次验收所需的轨迹、场景、相机采样、探测器图像和审计记录；大型中间光强数组和其他运行目录保留在生成它们的机器上，不纳入 Git。相机与光学监视器独立计时，手动启动时与三维 replay 不保证逐帧同步。[同步展示视频](docs/michelson-replay-presentation.md)可按需在本机导出，不随仓库分发。
 
@@ -11,16 +11,20 @@ cd ~/Desktop/workspace/robot-arm-control  # or your clone directory
 # Run a new native experiment (output directory must be new); add --view for the Isaac window.
 bash simulation/isaac/run_isaac_michelson.sh --output runs/isaac-new-run --stage full --view
 # View the verified native trajectory without rerunning physics.
-bash simulation/isaac/run_isaac_michelson_replay.sh --folder runs/isaac-michelson-final-20261103-006 --speed 2
+bash simulation/isaac/run_isaac_michelson_replay.sh --folder runs/isaac-michelson-final-20261103-006 --speed 4
 # View archived control-camera captures and phase-scanned optical measurements.
-./.venv/bin/python simulation/isaac/camera_optics_monitor.py --folder runs/isaac-michelson-final-20261103-006 --replay --speed 2
+./.venv/bin/python simulation/isaac/camera_optics_monitor.py --folder runs/isaac-michelson-final-20261103-006 --replay --speed 4
 ```
+
+三维 replay 增加 Laser / Detector 近景按钮；旧记录也会在显示副本中补上激光器筒身、出光口和方形探测屏。它们是示意外观，保留原夹持支架与碰撞体；屏面不冒充实测条纹，真实光学结果仍在监视器中。
+
+三维 replay 默认 4 倍速，完整实验约 60 秒。窗口提供 1 / 2 / 4 / 8 倍速、Pause / Resume、Restart 和前后 10 秒按钮；结束后保留场景，可继续切换相机、转动视角。倍速只改变回放时间，不改变控制参数；单独启动的光学监视器不会跟随三维窗口的暂停、跳转或倍速操作。
 
 启动脚本默认从 `~/Documents/isaacsim/isaac-sim-standalone-5.1.0-linux-x86_64/python.sh` 查找 Isaac Sim。安装在其他位置时，先设置 `export ISAAC_SIM_PYTHON=/path/to/isaac-sim/python.sh`。这些回放读取已保存的验收记录，不重新运行物理控制或生成新的验收结果。
 
 Backend implementations now live under `simulation/isaac/` and `simulation/mujoco/`; shared LightPipes optics and detector code remain in `simulation/`. The former top-level Python and shell entry points are compatibility launchers. The Isaac run reads the pinned MJCF as source geometry and kinematics but uses PhysX for motion, contacts, state, and camera rendering. For camera timestamps, recorded detector frames, and live viewing commands, see [Isaac camera and optics viewer](docs/isaac-camera-optics-view.md).
 
-With `--view`, a separate renderer displays the latest native PhysX state at a target 30 FPS and produces continuous 640×360 global, wrist RGB-D, and FAT-side previews at 5 Hz. All three preview cameras produce initial frames before arm motion starts. Open `camera_optics_monitor.py --folder <active-run>` without `--replay` to follow them. The display uses 100 ms interpolation; physical simulation can progress slower than wall time, as shown in the live window. High-resolution control captures and optical acceptance still use the native worker's original pipeline.
+With `--view`, a separate renderer displays recent native PhysX states at a target 60 FPS. Both live and 3D replay offer Overview / Global / Wrist / FAT camera buttons. All preview cameras produce initial frames before arm motion starts. Opening `camera_optics_monitor.py --folder <active-run>` without `--replay` automatically enables continuous 480×270 global, wrist RGB-D and FAT-side previews, published at up to 15 Hz; the main view then targets a steady 30 FPS. Closing the monitor restores the single-view 60 FPS budget. The display uses 100 ms interpolation; physical simulation can progress slower than wall time. High-resolution control captures and optical acceptance retain the native worker's original pipeline. Live and replay share the [studio display profile](docs/isaac-camera-optics-view.md#2026-11-09-展示质感与播放控制): DLSS Quality, deterministic directional shadows, key/fill lighting, satin materials and smooth arm normals. The control-camera configuration is unchanged.
 
 The MuJoCo [full Michelson process](docs/michelson-full-process.md) connects staged visual assembly, achieved-pose base holding, contact FAT adjustment, and LightPipes feedback in one persistent scene. Run `./.venv/bin/python -m simulation.michelson_experiment --output runs/michelson-live --view`. Native scene recordings can be watched with `./.venv/bin/python -m simulation.scene_recording --folder runs/michelson-full-demo --speed 3`; each sensor has its own window. The simpler preassembled benchmark remains available below.
 
