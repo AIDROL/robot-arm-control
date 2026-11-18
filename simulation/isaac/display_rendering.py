@@ -3,10 +3,11 @@
 Do not apply this profile to control/acceptance cameras in the physics worker.
 """
 import json
+import math
 from pathlib import Path
 
 
-def configure(viewport, resolution=(1440, 810), stage=None):
+def configure(viewport, resolution=(1440, 810), stage=None, *, ground_grid=False):
     import carb.settings
     import omni.replicator.core as rep
 
@@ -29,23 +30,64 @@ def configure(viewport, resolution=(1440, 810), stage=None):
     settings.set("/rtx/background/source/color", (.045, .055, .075))
     settings.set_bool("/app/viewport/grid/enabled", True)
     if stage is not None:
-        restore_ground(stage)
+        restore_ground(stage, ground_grid=ground_grid)
         studio_lighting(stage)
         surface_materials(stage)
 
 
 
-def restore_ground(stage):
+def restore_ground(stage, *, ground_grid=False):
     """Restore the existing physical floor's display; never add a collider."""
     from pxr import Gf, UsdGeom
 
-    for prim in stage.Traverse():
+    for prim in list(stage.Traverse()):
         if prim.GetCustomDataByKey("source_geom_name") == "floor":
-            # The source floor used a checker texture; the importer only
-            # copied its white material multiplier. Keep a readable fallback.
             prim.SetDisplayName("Ground Plane")
-            UsdGeom.Gprim(prim).CreateDisplayColorAttr([Gf.Vec3f(.20, .22, .25)])
+            color = (.038, .048, .062) if ground_grid else (.20, .22, .25)
+            UsdGeom.Gprim(prim).CreateDisplayColorAttr([Gf.Vec3f(*color)])
             UsdGeom.Imageable(prim).MakeVisible()
+            if ground_grid:
+                prim.SetCustomDataByKey("replay_ground_surface", True)
+                add_ground_grid(stage, prim)
+
+
+def add_ground_grid(stage, floor):
+    """Build world-aligned render geometry so camera captures see it too."""
+    from pxr import Gf, Usd, UsdGeom
+
+    bounds = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+    extent = bounds.ComputeWorldBound(floor).ComputeAlignedRange()
+    xmin, ymin, _ = extent.GetMin()
+    xmax, ymax, top = extent.GetMax()
+    spacing, half_width = .25, .004
+    height = top + .001
+    points = []
+
+    def stripe(left, bottom, right, upper):
+        points.extend(Gf.Vec3f(x, y, height) for x, y in (
+            (left, bottom), (right, bottom), (right, upper), (left, upper)))
+
+    for i in range(math.ceil((xmin + half_width) / spacing),
+                   math.floor((xmax - half_width) / spacing) + 1):
+        x = i * spacing
+        stripe(x - half_width, ymin, x + half_width, ymax)
+    for i in range(math.ceil((ymin + half_width) / spacing),
+                   math.floor((ymax - half_width) / spacing) + 1):
+        y = i * spacing
+        stripe(xmin, y - half_width, xmax, y + half_width)
+
+    path = floor.GetPath().GetParentPath().AppendChild(floor.GetName() + "_ReplayGrid")
+    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh.SetResetXformStack(True)
+    mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    mesh.CreatePurposeAttr(UsdGeom.Tokens.render)
+    mesh.CreatePointsAttr(points)
+    mesh.CreateFaceVertexCountsAttr([4] * (len(points) // 4))
+    mesh.CreateFaceVertexIndicesAttr(list(range(len(points))))
+    mesh.CreateExtentAttr(UsdGeom.PointBased.ComputeExtent(points))
+    mesh.CreateDisplayColorAttr([Gf.Vec3f(.092, .113, .141)])
+    mesh.GetPrim().SetDisplayName("Ground Grid")
+    mesh.GetPrim().SetCustomDataByKey("replay_ground_surface", True)
 
 
 def studio_lighting(stage):
@@ -81,16 +123,18 @@ def surface_materials(stage):
         color = tuple(map(float, colors[0]))
         # Keep the archived object colors, labels and detector markings intact.
         # Coated parts have a satin finish; dark support hardware is rougher.
-        roughness = .34 if max(color)-min(color) < .15 else .42
+        ground = prim.GetCustomDataByKey("replay_ground_surface")
+        roughness = .86 if ground else (.34 if max(color)-min(color) < .15 else .42)
+        metallic = 0. if ground else .12
         readable_screen = (prim.GetCustomDataByKey("source_geom_name") or "").endswith("_detector_screen")
-        key = color, roughness, readable_screen
+        key = color, roughness, metallic, readable_screen
         if key not in cache:
             material = UsdShade.Material.Define(stage, f"/World/DisplayMaterials/m{len(cache)}")
             shader = UsdShade.Shader.Define(stage, str(material.GetPath()) + "/Surface")
             shader.CreateIdAttr("UsdPreviewSurface")
             shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
             shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
-            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(.12)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(metallic)
             if readable_screen:
                 # A neutral display fill makes the blank screen recognizable
                 # inside the carrier shadow. This is not measured irradiance.
@@ -146,7 +190,7 @@ def settings_snapshot(viewport):
     if (result["settings"]["/rtx/post/aa/op"] != 3 or result["settings"]["/rtx/post/dlss/execMode"] != 2
             or result["settings"]["/rtx/shadows/enabled"] is not True
             or result["settings"]["/app/viewport/grid/enabled"] is not True):
-        raise RuntimeError("DISPLAY_RENDER_SETTINGS_OVERRIDDEN")
+        raise RuntimeError("DISPLAY_RENDER_SETTINGS_OVERRIDDEN: " + json.dumps(result))
     return result
 
 

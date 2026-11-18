@@ -1,5 +1,35 @@
 # Robot Arm Control — xArm7 optics simulation (MuJoCo / Isaac Sim)
 
+## 2026-11-18 · Isaac Sim 五件装配与 FAT 闭环
+
+这轮从器件暂存区开始，用 **xArm7** 完成五件放置，再抓取 STEP 模型对应的新 FAT。工具相机通过 ArUco 对准镜座，两轴接触入孔后由探测器图像反馈调光。工具撤出并回位后重新测量。
+
+[![播放完整 Michelson 仿真回放（53 秒）](docs/media/fat-cad-michelson-replay.jpg)](docs/media/fat-cad-michelson-replay.mp4?raw=true)
+
+[播放 MP4](docs/media/fat-cad-michelson-replay.mp4?raw=true) · 约 53 秒，5 倍速。画面含全景、全局相机、末端 RGB-D、FAT 侧视和记录的探测器测量。
+
+| 仿真验收项 | 结果 |
+| --- | --- |
+| 放置完成 | 5/5，最大平面误差 1.345 mm |
+| FAT 光学反馈 | 12 次调节，非预期接触 0 次 |
+| 回位误差 | 1.347 mm |
+| 撤出后干涉可见度 | 99.9959%（512 网格），99.9958%（1024 网格） |
+
+用本机 Isaac Sim 5.1 和项目 Python 3.11 环境复跑。命令从仓库根目录执行：
+
+```bash
+env -u PYTHONPATH .venv/bin/python scripts/fat_closed_loop.py run --assembly \
+  --folder runs/fat-cad-full-new
+
+env -u PYTHONPATH .venv/bin/python scripts/fat_closed_loop.py replay \
+  --folder runs/fat-cad-full-new --camera overview
+```
+
+回放视频来自本地验收记录 `fat-cad-full-20261118-02` 的 250.21 秒 PhysX 轨迹。FAT 调光用 Isaac 内部控制器和标量光学模型。新镜座为匹配 CAD 的仿真设计。
+
+## 历史仿真与使用说明
+
+
 Ubuntu 22.04 / Isaac Sim 5.1 的原始迁移背景、模块接口与交接步骤见 [交接文档](docs/isaac-sim-5.1-handoff.md)，本机最新验收结果见下文。
 
 本机 Ubuntu / Isaac Sim 5.1 已完成 [Michelson 原生全流程验收](docs/isaac-michelson-validation-2026-11-03.md)：从空实验区物理装配五件器件、FAT 接触调镜、工具归还，以及归还后的新光学测量与独立审计。最终记录为 `runs/isaac-michelson-final-20261103-006`；当前 105 项测试通过。光学仍采用理想 LightPipes 模型和暂定机构参数。初始 ROS 2 图像与机械臂导入基线见 [Ubuntu 迁移记录](docs/ubuntu-isaac-migration-2026-11-03.md)。

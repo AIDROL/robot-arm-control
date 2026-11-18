@@ -1,0 +1,56 @@
+{
+  "source": "fat_mobile_v1.step",
+  "source_sha256": "e135896f0f58752103011af42ad41305595baf8fca4af406efe81329431212d1",
+  "converted": "fat_mobile_v1.usd",
+  "converted_sha256": "40e1bcfcef4613b33ae0f257e364b55c640094a9df70e14fe0959305ad52fb76",
+  "converter": "Isaac Sim 5.1 omni.kit.converter.hoops_core 509.1.0, tessLOD 3, no instancing",
+  "meters_per_unit": 1.0,
+  "up_axis": "Z",
+  "cad_world_bounds_m": {
+    "min": [
+      -0.10378102992105487,
+      -0.03752270422282113,
+      0.9610500023841928
+    ],
+    "max": [
+      0.008104461523497673,
+      0.11247729428706275,
+      1.059399999354787
+    ]
+  },
+  "anchor_cad_m": [
+    -0.0478382841987786,
+    0.00747729577717887,
+    1.01022500086949
+  ],
+  "rotation_cad_to_body": [
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      -1
+    ],
+    [
+      0,
+      1,
+      0
+    ]
+  ],
+  "anchor_reason": "Stand CAD +Y upright along world +Z; CAD -Z shafts point along tool +Y. CAD minimum Y rests on the 0.760 m bench when body origin is z=0.805 m.",
+  "top_marker": {
+    "dictionary": "DICT_4X4_50",
+    "id": 20,
+    "edge_m": 0.018,
+    "quiet_zone_m": 0.003,
+    "surface": "protruding main-plate CAD +Y end face",
+    "id_status": "simulation assignment; match physical sticker before hardware calibration"
+  },
+  "scope": "CAD appearance in the five-component assembly scene; existing FAT contact and drive proxies remain for future calibration",
+  "calibration_gap": "The STEP shaft centers are about 52.3 mm apart, while the present two-axis virtual knob interface is about 33.9 mm apart. This file does not validate FAT insertion or drive mechanics.",
+  "original_step_sha256": "4466da66984f0dc0c9f87b29b224ad61f7b41b7829e485b4da9a3286d83cb893",
+  "source_metadata": "Published copy omits author contact metadata from the STEP header. Geometry is unchanged."
+}

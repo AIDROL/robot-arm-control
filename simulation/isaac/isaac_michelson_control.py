@@ -66,6 +66,7 @@ class Experiment:
         self.max_fk_error = 0.
         self.max_transmission_error = 0.
         self.feedback_action_limit = feedback_action_limit
+        self.last_checkpoint_time = self.sim.time
         self.trajectory.append((self.sim.time, self.phase, self.d.qpos.copy(),
                                 np.array(list(self.sim.body_poses.values())), self.command.copy()))
 
@@ -177,6 +178,8 @@ class Experiment:
                     raise RuntimeError("PHYSX_SCREW_LEVER_CONSTRAINT_MISMATCH:" + str(residual))
             self.trajectory.append((self.sim.time, self.phase, self.d.qpos.copy(),
                                     np.array(list(self.sim.body_poses.values())), self.command.copy()))
+            if self.sim.time-self.last_checkpoint_time >= 10.:
+                self.save()
 
     def servo(self, goal, orientation, dt):
         actual = self.sim.site_pose("pinch_center")
@@ -344,14 +347,15 @@ class Experiment:
         return record
 
     def save(self):
+        from simulation.isaac.checkpoint_io import atomic_npz
         if self.socket_telemetry:
             values = np.array(self.socket_telemetry)
-            np.savez_compressed(self.sim.output / "physx-socket-seating.npz", time_s=values[:, 0],
+            atomic_npz(self.sim.output / "physx-socket-seating.npz", time_s=values[:, 0],
                 lower_depth_m=values[:, 1], lower_radial_m=values[:, 2],
                 upper_depth_m=values[:, 3], upper_radial_m=values[:, 4])
         if not self.trajectory:
             return
-        np.savez_compressed(self.sim.output / "physx-trajectory.npz",
+        atomic_npz(self.sim.output / "physx-trajectory.npz",
                             time_s=np.array([r[0] for r in self.trajectory]),
                             phase=np.array([r[1] for r in self.trajectory]),
                             measured_qpos=np.array([r[2] for r in self.trajectory]),
@@ -364,13 +368,19 @@ class Experiment:
                             physics_dt_s=self.sim.dt)
         if self.contact_telemetry:
             rows = self.contact_telemetry
-            np.savez_compressed(self.sim.output / "physx-contacts.npz",
+            atomic_npz(self.sim.output / "physx-contacts.npz",
                 time_s=np.array([r[0] for r in rows]), phase=np.array([r[1] for r in rows]),
                 active=np.array([r[2] for r in rows]),
                 left_normal_N=np.array([r[3] for r in rows]), right_normal_N=np.array([r[4] for r in rows]),
                 table_normal_N=np.array([r[5] for r in rows]),
                 lower_socket_contact=np.array([r[6] for r in rows]), upper_socket_contact=np.array([r[7] for r in rows]),
                 active_body_z_m=np.array([r[8] for r in rows]), active_body_to_tcp_m=np.array([r[9] for r in rows]))
+        from simulation.isaac.live_stream import write_json
+        write_json(self.sim.output/'checkpoint-status.json',{
+            'scope':'partial observed native trace; not a completed acceptance result',
+            'time_s':self.sim.time,'last_trajectory_sample_s':self.trajectory[-1][0],
+            'phase':self.phase,'frames':len(self.trajectory),'placements':self.placements})
+        self.last_checkpoint_time=self.sim.time
 
     def optical_sample(self, label, n=1024):
         from simulation.michelson_assembly_optics import ROLES, from_poses
@@ -389,6 +399,7 @@ class Experiment:
         (folder / "measurement.json").write_text(json.dumps(observation, indent=2))
         (folder / "actual-optical-planes.json").write_text(json.dumps({r: T.tolist() for r, T in poses.items()}, indent=2))
         np.save(folder / "intensity-W-m2.npy", intensity)
+        self.save()
         print("ISAAC_OPTICS", label, observation["valid"], observation["visibility"], flush=True)
         return observation
 
@@ -497,7 +508,7 @@ class Experiment:
             return phase.position, phase.orientation
         W_F = np.eye(4)
         W_F[:3, :3] = (phase.orientation * DOWN.inv()).as_matrix()
-        W_F[:3, 3] = phase.position - W_F[:3, :3] @ np.array([0., 0., .018])
+        W_F[:3, 3] = phase.position - W_F[:3, :3] @ self.m.site('fat_grasp').pos
         W_G = W_F @ np.linalg.inv(self.tool_grasp)
         if np.linalg.norm(W_G[:3, 3] - phase.position) > .010:
             raise RuntimeError("FAT_VISUAL_CORRECTION_TOO_LARGE")
@@ -530,6 +541,9 @@ class Experiment:
         raise RuntimeError("FAT_PHYSX_BILATERAL_ENGAGEMENT_TIMEOUT")
 
     def fat(self):
+        if self.sim.config.get("fat_mechanical_profile") == "cad_v1_matching_fixture":
+            from simulation.isaac.fat_interface_audit import require_compatible
+            require_compatible(self.m, self.sim.output)
         from simulation.mujoco.fat_mechanics import plan
         from simulation.michelson_assembly_optics import PhaseGradientSearch
         self.event("FRESH_POST_ASSEMBLY_VISION")
@@ -539,6 +553,11 @@ class Experiment:
         fixture = observed[4]
         phases = plan(self.d, fixture_pose=fixture, staging_xy=self.sim.config["fat_staging_xy_m"],
                       shaft_extension=self.sim.config["driver_half_length_m"] - .016)
+        if self.sim.config.get('fat_mechanical_profile') == 'cad_v1_matching_fixture':
+            from simulation.mujoco.fat_cad_mechanics import plan as cad_plan
+            if 20 not in observed:
+                raise RuntimeError('FRESH_FAT_TOP_MARKER_MISSING')
+            phases = cad_plan(self.d, fixture, self.sim.config['fat_staging_xy_m'], pickup_pose=observed[20])
         initial = self.sim.body_poses[self.m.body("fat").id].copy()
         self.active = "fat"
         self.metrics = {"max_lift_m": 0., "carrying_samples": 0, "bilateral_samples": 0,
@@ -631,13 +650,39 @@ class Experiment:
                     # The hex vertices start on socket-wall normals. Rotate
                     # 30 degrees to present flats before axial insertion.
                     # Use finite native drives in free space, never a pose snap.
-                    self.sim.command(["lower_motor_joint", "upper_motor_joint"], [np.pi / 6] * 2)
+                    angle = np.pi/6
+                    if self.sim.config.get('fat_mechanical_profile') == 'cad_v1_matching_fixture':
+                        from simulation.mujoco.fat_cad_mechanics import hex_prealign
+                        angle = hex_prealign()
+                    self.sim.command(["lower_motor_joint", "upper_motor_joint"], [angle] * 2)
                     self.hold(.7)
                     encoder = [float(self.d.joint(label + "_motor_joint").qpos[0])
                                for label in ("lower", "upper")]
                     self.event("FAT_HEX_PHASE_PREALIGNED", motor_encoder_rad=encoder)
-                    if np.max(np.abs(np.array(encoder) - np.pi / 6)) > .02:
+                    if np.max(np.abs(np.array(encoder) - angle)) > .02:
                         raise RuntimeError("FAT_HEX_PHASE_PREALIGN_FAILED")
+                    if self.sim.config.get('fat_mechanical_profile') == 'cad_v1_matching_fixture':
+                        # Carrying changes the frictional grasp by ~2 mm. Align
+                        # the observed tool while still 20 mm outside the hole;
+                        # blending this correction into axial insertion can
+                        # hit the flat entrance before the chamfer can guide it.
+                        self.tool_observation(fixture, self.side_index)
+                        self.side_index += 1
+                        aligned, aligned_R = self.tool_goal(phase)
+                        self.move('fat: visual prealign', aligned, aligned_R, 2.,
+                                  position_tolerance=phase.position_tolerance,
+                                  orientation_tolerance=phase.orientation_tolerance)
+                        safety=self.socket_seating()
+                        self.event('FAT_VISUAL_PREALIGN_COMPLETED', safety_readback=safety,
+                                   radial_admission_limit_m=.0005)
+                        if max(safety[1],safety[3]) >= .0005:
+                            raise RuntimeError('FAT_RADIAL_PREALIGN_ADMISSION_FAILED:'+str(safety))
+                        rgb, depth, K, W_C = self.sim.capture_sensor('wrist_rgbd','fat-wrist-preinsert',depth=True)
+                        valid=np.isfinite(depth)&(depth>0)
+                        (self.sim.output/'fat-wrist-preinsert-calibration.json').write_text(json.dumps({
+                            'time_s':self.sim.time,'K':K.tolist(),'T_world_camera_optical':W_C.tolist(),
+                            'depth_unit':'m','valid_depth_fraction':float(valid.mean()),
+                            'depth_median_m':float(np.median(depth[valid])) if valid.any() else None},indent=2))
                 if phase.label == "fat: return lower":
                     self.seat("fat", orientation)
         self.event("POST_RETURN_SETTLING")

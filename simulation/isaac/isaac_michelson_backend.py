@@ -43,9 +43,11 @@ def transform(prim, T):
 
 
 class IsaacMechanics:
-    def __init__(self, app, output, view=False, dt=.001, width=1280, height=720):
+    def __init__(self, app, output, view=False, dt=.001, width=1280, height=720, config=None, targets=None):
         self.app, self.output, self.dt = app, Path(output), dt
-        self.config, self.targets = load_layout()
+        if (config is None) != (targets is None):
+            raise ValueError("config and targets must be supplied together")
+        self.config, self.targets = load_layout() if config is None else (config, targets)
         self.model = make_scene(self.config, self.targets)
         self.data = mujoco.MjData(self.model)
         mujoco.mj_kinematics(self.model, self.data)
@@ -154,6 +156,9 @@ class IsaacMechanics:
                 "horizontal_aperture": 2.0955,
                 "focal_length": float(2.0955 * 720 / 1280 / (2 * np.tan(np.deg2rad(self.model.cam_fovy[source]) / 2)))}
         write_json(self.live_folder / "cameras.json", cameras)
+        # Immutable mount calibration for RGB-D replay, independent of whether
+        # the optional live renderer or FAT adjustment stage was started.
+        write_json(self.output / "cameras.json", cameras)
         self.publish_live(force=True)
 
     def publish_live(self, force=False, check_stop=True):
@@ -241,6 +246,7 @@ class IsaacMechanics:
 
     def _build_geometries(self):
         m, d = self.model, self.data
+        cad_fat = self.config.get('fat_mechanical_profile') == 'cad_v1_matching_fixture'
         for i in range(m.ngeom):
             body = int(m.geom_bodyid[i])
             owner = self.link_owners.get(body, 0)
@@ -303,7 +309,9 @@ class IsaacMechanics:
                 rgba = m.mat_rgba[m.geom_matid[i]].copy()
             geom.CreateDisplayColorAttr([Gf.Vec3f(*map(float, rgba[:3]))])
             # Contact decomposition is invisible; source visuals retain the STL.
-            if m.geom_group[i] == 3 or rgba[3] == 0:
+            if m.geom_group[i] == 3 or rgba[3] == 0 or (cad_fat and m.geom(i).name in (
+                "fat_housing", "fat_lower_key", "fat_upper_key"
+            )):
                 geom.CreateVisibilityAttr("invisible")
             self.geom_paths[path] = i
             if collision:
@@ -323,6 +331,12 @@ class IsaacMechanics:
                     UsdPhysics.MeshCollisionAPI.Apply(geom.GetPrim()).CreateApproximationAttr("convexHull")
                 UsdShade.MaterialBindingAPI.Apply(geom.GetPrim()).Bind(self._material(m.geom_friction[i, 0]),
                     bindingStrength=UsdShade.Tokens.weakerThanDescendants, materialPurpose="physics")
+        if cad_fat:
+            # Embed the STEP tessellation to make the saved scene portable.
+            from simulation.isaac.cad_fat import add_fat_visual
+            driver_paths = {label: self.body_paths[m.body(label + "_driver").id]
+                            for label in ("lower", "upper")}
+            add_fat_visual(self.stage, self.body_paths[m.body("fat").id], self.output, driver_paths=driver_paths)
 
     def _joint(self, path, parent_path, child_path, world_frame, kind, parent_T, child_T):
         joint = kind.Define(self.stage, path)
@@ -666,7 +680,7 @@ class IsaacMechanics:
         square = np.array([[-h, h, 0.], [h, h, 0.], [h, -h, 0.], [-h, -h, 0.]])
         if ids is not None:
             for marker, pixels in zip(ids.flatten(), corners):
-                if marker > 4:
+                if marker > 4 and marker != 20:
                     continue
                 ok, rv, tv = cv2.solvePnP(square, pixels.reshape(4, 2).astype(float), self.K,
                                          np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
@@ -677,7 +691,7 @@ class IsaacMechanics:
                 # A resting module's support plane is a calibration input,
                 # not simulator object truth. It avoids the severe depth /
                 # tilt ambiguity of a distant 24 mm monocular marker.
-                plane_z = .76 + .114 + .05235
+                plane_z = .805 + .105 + .00017 if marker == 20 else .76 + .114 + .05235
                 world_corners = []
                 for u, v in pixels.reshape(4, 2):
                     ray = self.W_C[:3, :3] @ np.linalg.solve(self.K, [u, v, 1.])
@@ -689,7 +703,8 @@ class IsaacMechanics:
                 from simulation.isaac.isaac_michelson_control import upright_marker_rotation
                 pose = np.eye(4)
                 pose[:3, :3] = upright_marker_rotation(points)
-                pose[:3, 3] = points.mean(axis=0) - [0., 0., .05235]
+                offset = [.005057254,-.007274999,.10517] if marker == 20 else [0.,0.,.05235]
+                pose[:3, 3] = points.mean(axis=0) - pose[:3,:3] @ offset
                 observed[int(marker)] = pose
         (self.output / f"{label}-vision.json").write_text(json.dumps({
             "time_s": self.time, "source": "Isaac RGB corners + calibrated table/top-marker plane; resting modules only",

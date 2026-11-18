@@ -44,10 +44,15 @@ def make_scene(config,targets):
             spec.joint(label+'_motor_joint').range=[-20,20]
             spec.actuator(label+'_motor').ctrlrange=[-20,20]
             spec.joint(label+'_knob_joint').frictionloss=config['knob_frictionloss_Nm']
+        if config.get('fat_mechanical_profile') == 'cad_v1_matching_fixture':
+            from .fat_cad_mechanics import configure
+            configure(spec)
         spec.body('fat').pos=[*config['fat_staging_xy_m'],.805]
         for index,item in enumerate(config['components']):
             name=item['id'];body=spec.body(name)
-            body.pos=[(-.3+.15*index),.50,.874];body.quat=[1,0,0,0]
+            staging = config.get('staging_poses', {}).get(name)
+            body.pos=[(-.3+.15*index),.50,.874] if staging is None else staging['position_m']
+            body.quat=[1,0,0,0] if staging is None else staging['quaternion_wxyz']
             if name!='mirror':add_mount_targets(spec,body,name)
             if item['role'] in ('laser', 'detector'):
                 from simulation.optical_device_visuals import add_mjcf_device

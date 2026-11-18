@@ -17,7 +17,8 @@ parser.add_argument("--view", action="store_true", help="Independent smooth live
 parser.add_argument("--view-fps", type=float, default=60., help="Live viewport frame rate target")
 parser.add_argument("--camera-fps", type=float, default=15., help="Live camera preview publication rate")
 parser.add_argument("--preview-width", type=int, default=480, help="Live camera preview width")
-parser.add_argument("--stage", choices=("settle", "grip", "pick", "assembly", "full"), default="full")
+parser.add_argument("--stage", choices=("settle", "grip", "pick", "assembly", "full", "fat-bench"), default="full")
+parser.add_argument("--config", type=Path, default=ROOT/'configs/optical_setups/michelson_full.json')
 parser.add_argument("--component", choices=("lens_1", "pinhole", "lens_2", "beam_splitter", "mirror"), default="lens_1")
 parser.add_argument("--seconds", type=float, default=1.)
 parser.add_argument("--dt", type=float, default=.002)
@@ -33,17 +34,26 @@ if args.view_fps <= 0 or args.camera_fps <= 0 or args.preview_width < 160:
 args.output = args.output.resolve()
 args.output.mkdir(parents=True, exist_ok=False)
 sources = (("isaac_michelson.py", "isaac"), ("isaac_michelson_backend.py", "isaac"),
+           ("cad_fat.py", "isaac"),
+           ("fat_interface_audit.py", "isaac"),
+           ("checkpoint_io.py", "isaac"),
            ("isaac_michelson_control.py", "isaac"), ("michelson_assembly_optics.py", ""),
            ("michelson_experiment.py", "mujoco"), ("fat_mechanics.py", "mujoco"),
+           ("fat_cad_mechanics.py", "mujoco"),
            ("live_stream.py", "isaac"), ("isaac_michelson_live.py", "isaac"),
            ("display_rendering.py", "isaac"), ("optical_device_visuals.py", ""))
 (args.output / "source").mkdir()
 for name, backend in sources:
     (args.output / "source" / name).write_bytes((ROOT / "simulation" / backend / name).read_bytes())
-(args.output / "configuration.json").write_bytes((ROOT / "configs/optical_setups/michelson_full.json").read_bytes())
+fat_assets = ROOT / "assets/fat"
+for name in ("fat_mobile_v1.step", "fat_mobile_v1.usd", "fat_mobile_v1.json", "fat_mobile_v1_geometry.json"):
+    (args.output / "source" / name).write_bytes((fat_assets / name).read_bytes())
+(args.output / "configuration.json").write_bytes(args.config.read_bytes())
 (args.output / "provenance.json").write_text(json.dumps({
     "source_sha256": {name: hashlib.sha256((ROOT / "simulation" / backend / name).read_bytes()).hexdigest() for name, backend in sources},
-    "configuration_sha256": hashlib.sha256((ROOT / "configs/optical_setups/michelson_full.json").read_bytes()).hexdigest(),
+    "fat_asset_sha256": {name: hashlib.sha256((fat_assets / name).read_bytes()).hexdigest()
+                         for name in ("fat_mobile_v1.step", "fat_mobile_v1.usd", "fat_mobile_v1.json", "fat_mobile_v1_geometry.json")},
+    "configuration_sha256": hashlib.sha256(args.config.read_bytes()).hexdigest(),
     "source_roles": "MuJoCo asset compiler / kinematics only; native PhysX dynamics, contacts, state and Isaac images",
     "mechanics": "source geometry/inertia and finite-force drives; PhysX mimic screw-lever; passive elasto-plastic knob friction",
     "argv": sys.argv}, indent=2))
@@ -54,23 +64,34 @@ signal.signal(signal.SIGINT, signal.default_int_handler)
 # Append project wheels after Isaac's own packages: its NumPy / OpenCV / SciPy
 # stay authoritative. MuJoCo supplies the asset compiler and kinematics only.
 sys.path.append(str(ROOT / ".venv/lib/python3.11/site-packages"))
+if os.environ.get('AIDROL_BACKEND_SITE_PACKAGES'):
+    sys.path.append(os.environ['AIDROL_BACKEND_SITE_PACKAGES'])
 import numpy as np
 from simulation.isaac.isaac_michelson_backend import IsaacMechanics
 from simulation.isaac.isaac_michelson_control import Experiment, DOWN
 
 result = {"success": False, "engine": "Isaac Sim 5.1 / PhysX", "stage": args.stage,
-          "started_from_empty_area": args.resume is None,
+          "started_from_empty_area": args.resume is None and args.stage != 'fat-bench',
           "scope": "stage-specific acceptance; only stage=full includes assembly, FAT and fresh post-return optics",
           "base_holding": "30 N contact-supported release attraction proxy, then ideal fixed joint at attained pose; no magnetic field simulation"}
 started = time.monotonic()
 experiment = None
 live_process = None
 try:
-    mechanics = IsaacMechanics(app, args.output, False, dt=args.dt)
+    from simulation.mujoco.michelson_experiment import load_layout
+    config, targets = load_layout(args.config)
+    if args.stage == 'fat-bench':
+        config['staging_poses']={name:{'position_m':T[:3,3].tolist(),'quaternion_wxyz':__import__('scipy').spatial.transform.Rotation.from_matrix(T[:3,:3]).as_quat()[[3,0,1,2]].tolist()} for name,T in targets.items()}
+        (args.output/'configuration.json').write_text(json.dumps(config,indent=2))
+        provenance=json.loads((args.output/'provenance.json').read_text())
+        provenance['configuration_sha256']=hashlib.sha256((args.output/'configuration.json').read_bytes()).hexdigest()
+        (args.output/'provenance.json').write_text(json.dumps(provenance,indent=2))
+        result['scope']='Preassembled matching virtual fixture; FAT closed-loop bench only, no new assembly acceptance'
+    mechanics = IsaacMechanics(app, args.output, False, dt=args.dt, config=config, targets=targets)
+    mechanics.start_live_stream()
     result["physics_dt_s"] = args.dt
     experiment = Experiment(mechanics, feedback_action_limit=args.feedback_actions)
     if args.view:
-        mechanics.start_live_stream()
         launcher = next((p / "python.sh" for p in Path(sys.executable).resolve().parents
                          if (p / "python.sh").is_file() and (p / "setup_python_env.sh").is_file()
                          and (p / "apps").is_dir()), None)
@@ -89,7 +110,7 @@ try:
                 raise RuntimeError("LIVE_VIEW_FIRST_FRAMES_TIMEOUT: see live-view.log")
             time.sleep(.05)
         result["live_display"] = "separate renderer; 100 ms display interpolation; native dynamics and control captures unchanged"
-    experiment.event("EMPTY_EXPERIMENT_AREA")
+    experiment.event("PREASSEMBLED_SIMULATION_BENCH" if args.stage == 'fat-bench' else "EMPTY_EXPERIMENT_AREA")
     initial = {name: mechanics.site_pose(name + "_optical_axis")[:3, 3].tolist()
                for name in ("lens_1", "pinhole", "lens_2", "beam_splitter", "mirror")}
     contacts = 0
@@ -108,7 +129,12 @@ try:
                       and all(np.linalg.norm(np.array(initial[n]) - positions[n]) < .005 for n in initial))
     result["scene_gate_passed"] = scene_gate
     result["success"] = scene_gate if args.stage == "settle" else False
-    if args.resume is not None:
+    if args.stage == 'fat-bench':
+        for component in config['components']:
+            mechanics.latch(component['id'])
+        result['fat']=experiment.fat()
+        result['success']=result['fat']['success']
+    elif args.resume is not None:
         if args.stage != "full":
             raise ValueError("Resume is only for full-stage FAT development")
         resumed_placements = mechanics.restore_assembly(args.resume)

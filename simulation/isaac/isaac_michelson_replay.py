@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--folder", type=Path, required=True)
+parser.add_argument("--state-dir", type=Path, help="Workbench clock/control sidecars; outside native evidence")
+parser.add_argument("--aruco", action="store_true", help="Show actual OpenCV ArUco detections inside Isaac")
+parser.add_argument("--wrist-depth", action="store_true", help="Show synchronized wrist RGB and metric depth")
 parser.add_argument("--speed", type=float, default=4., help="Initial playback speed (display only; default: 4x)")
 parser.add_argument("--start-seconds", type=float)
 parser.add_argument("--max-frames", type=int, default=0, help="Bounded viewer smoke test")
@@ -41,12 +44,16 @@ from omni.kit.viewport.utility import get_active_viewport, capture_viewport_to_f
 from pxr import Gf, UsdGeom, UsdPhysics
 from simulation.isaac.display_rendering import configure, settings_snapshot, PoseWriter, ViewportProbe, add_cameras
 from simulation.isaac.replay_clock import ReplayClock
+from simulation.isaac.replay_sync import ReplaySync
 
 trajectory = np.load(folder / "physx-trajectory.npz")
 times, poses = trajectory["time_s"], trajectory["body_poses"]
 if len(times) < 2 or np.any(np.diff(times) <= 0):
     raise ValueError("Replay requires a monotonic recorded trajectory")
-result = json.loads((folder / "result.json").read_text())
+result_path = folder / "result.json"
+if not result_path.is_file():
+    result_path = folder.parent / "result.json"  # HTTP toolkit stores result beside native/.
+result = json.loads(result_path.read_text())
 phases = trajectory["phase"].tolist()
 final_state = folder/"optics/released-1024/native-state.npz"
 if result["time_s"] > times[-1] + 1e-9 and final_state.is_file():
@@ -56,6 +63,12 @@ if result["time_s"] > times[-1] + 1e-9 and final_state.is_file():
         times = np.r_[times, float(final["time_s"])]
         poses = np.concatenate([poses, final["body_poses"][None]], axis=0)
         phases.append("verified after tool return")
+elif result.get('scope') == 'assembly_only' and result['time_s'] > times[-1]:
+    # Sampling can finish a fraction of a frame before the completion event.
+    # Hold the last measured sample; never manufacture a new physical sample.
+    times = np.r_[times, float(result['time_s'])]
+    poses = np.concatenate([poses, poses[-1:]], axis=0)
+    phases.append('assembly complete (last sampled pose held)')
 open_stage(str(folder / "scene.usda"))
 while is_stage_loading():
     app.update()
@@ -73,12 +86,20 @@ viewport = get_active_viewport()
 viewport.set_active_camera(str(camera.GetPath()))
 set_camera_view(eye=np.array([1.4, -1.1, 1.7]), target=np.array([0., .28, .85]),
                 camera_prim_path=str(camera.GetPath()))
-from simulation.optical_device_visuals import upgrade_isaac_display
-device_cameras = upgrade_isaac_display(stage, json.loads((folder/"configuration.json").read_text()))
-configure(viewport, stage=stage)
+device_cameras = {}
+if result.get('scope') != 'assembly_only':
+    from simulation.optical_device_visuals import upgrade_isaac_display
+    device_cameras = upgrade_isaac_display(stage, json.loads((folder/"configuration.json").read_text()))
+configure(viewport, stage=stage, ground_grid=True)
 probe = ViewportProbe(args.render_probe_dir, viewport)
 camera_paths = {"overview": str(camera.GetPath()), "global": "/World/GlobalCamera", **device_cameras}
-if (folder/"fat-side-000.json").is_file():
+calibration_path = folder / "cameras.json"
+if not calibration_path.is_file():
+    calibration_path = folder / "live/cameras.json"
+if calibration_path.is_file():
+    calibrated = add_cameras(stage, json.loads(calibration_path.read_text()))
+    camera_paths.update(wrist=calibrated["wrist"], fat=calibrated["side"])
+elif (folder/"fat-side-000.json").is_file():
     sys.path.append(str(ROOT/".venv/lib/python3.11/site-packages"))
     from simulation.isaac.presentation_data import camera_calibration
     descriptors, _ = camera_calibration(folder, trajectory["body_names"].tolist())
@@ -90,12 +111,17 @@ viewport.set_active_camera(camera_paths[args.camera])
 start = float(times[0]) if args.start_seconds is None else max(float(times[0]), args.start_seconds)
 start = min(start, float(times[-1]))
 clock = ReplayClock(start, float(times[-1]), args.speed, paused=args.freeze)
-window = ui.Window("Recorded PhysX trajectory", width=590, height=245)
+sync = ReplaySync(args.state_dir, folder=folder)
+window = ui.Window("Recorded PhysX trajectory / ROSi", width=700, height=410)
 with window.frame:
     with ui.VStack(spacing=5):
-        ui.Label("REPLAY ONLY - schematic device visuals; recorded physics")
-        ui.Label("Source: " + ("empty-area execution" if result["started_from_empty_area"] else "explicit development resume"))
+        ui.Label("RECORDED PHYSX - display only; no new control jobs")
+        ui.Label("Source: " + ("verified toolkit assembly" if result.get('scope') == 'assembly_only' else
+                 "preassembled matching virtual FAT fixture" if result.get('stage') == 'fat-bench' else
+                 "empty-area execution" if result.get("started_from_empty_area") else "explicit development resume"))
         status = ui.Label("")
+        protocol = ui.Label("Workflow: Sim | recorded ROSi; no HTTP resubmission")
+        command_text = ui.Label("", word_wrap=True, height=130, style={"font_size":14})
         with ui.HStack(height=26):
             for label, path in camera_paths.items():
                 ui.Button(label.title(), clicked_fn=lambda path=path: viewport.set_active_camera(path))
@@ -112,6 +138,34 @@ with window.frame:
             for speed in (1., 2., 4., 8.):
                 ui.Button(f"{speed:g}x", clicked_fn=lambda speed=speed: clock.set_speed(speed))
         ui.Label("End: holds the final scene. Restart to play again.", height=22)
+aruco = None
+if args.aruco:
+    from simulation.isaac.aruco_view import ArucoView, component_labels
+    config = json.loads((folder/'configuration.json').read_text())
+    snapshot_file = folder.parent/'input-snapshot.json'
+    bindings = json.loads(snapshot_file.read_text())['bundle']['profile']['bindings'] if snapshot_file.is_file() else []
+    aruco = ArucoView(viewport, component_labels(config, bindings), args.state_dir)
+    # Keep both native panels visible without hiding them behind each other.
+    window.position_x, window.position_y = 15, 70
+    aruco.window.position_x, aruco.window.position_y = 735, 70
+wrist_depth = None
+if args.wrist_depth:
+    if "wrist" not in camera_paths:
+        raise ValueError("This archive has no wrist mount calibration; use --no-wrist-depth")
+    from simulation.isaac.wrist_depth_view import WristDepthView
+    wrist_depth = WristDepthView(camera_paths["wrist"], args.state_dir)
+    # Run render annotators on normal app frames. Every rigid body and joint
+    # above is disabled; body poses still come exclusively from the archive.
+    import omni.replicator.core as rep
+    rep.orchestrator.set_capture_on_play(True)
+    omni.timeline.get_timeline_interface().play()
+    window.width, window.height = 700, 340
+    window.position_x, window.position_y = 10, 490
+    wrist_depth.window.width, wrist_depth.window.height = 620, 330
+    wrist_depth.window.position_x, wrist_depth.window.position_y = 790, 430
+    if aruco:
+        aruco.window.width, aruco.window.height = 620, 350
+        aruco.window.position_x, aruco.window.position_y = 790, 40
 prims = [stage.GetPrimAtPath("/World/Bodies/" + name) for name in trajectory["body_names"]]
 pose_writer = PoseWriter(prims)
 quaternions = Rotation.from_matrix(poses[:, :, :3, :3].reshape(-1, 3, 3)).as_quat().reshape(len(times), len(prims), 4)
@@ -138,23 +192,58 @@ def show_time(t):
 show_time(start)
 for _ in range(12):
     app.update()
+if wrist_depth:
+    import carb.settings
+    carb.settings.get_settings().set_bool("/app/viewport/grid/enabled", True)
 wall_start = next_frame = time.monotonic()
 clock.seek(start, wall_start)
 ended_wall = None
 t = start
+previous_camera_time = start
+failure = None
 try:
     while app.is_running():
         wall = time.monotonic()
         if last_frame_wall is not None:
             intervals.append(wall-last_frame_wall)
         last_frame_wall = wall
+        sync.command(clock, lambda name: viewport.set_active_camera(camera_paths[name]))
         t = clock.advance(wall)
         phase = show_time(t)
         visited_phases.add(phase)
         fps = 1/max(np.median(intervals[-60:]), 1e-6) if intervals else 0.
         status.text = f"t={t:.2f} / {times[-1]:.2f} s | {phase} | {clock.speed:g}x | {fps:.1f} FPS"
+        sync.write(clock, phase, str(viewport.camera_path), wall=wall)
+        active = [e for e in sync.events if e['time_s'] <= t and e['stage'] == 'ROSI_STEP_STARTED']
+        step = active[-1] if active else None
+        protocol.text = (f"Workflow: Sim | ROSi #{step['i']} {step['op']} {step['component']} (recorded)"
+                         if step else "Workflow: Sim | before ROSi step (recorded)")
+        primitive = next((s for s in sync.timeline.get('steps',[]) if step and s['i']==step['i']), None)
+        command_text.text = ('rosi/1.0 | plan_id: '+result.get('plan_id','legacy')+'\n'+json.dumps(primitive,indent=2)
+                             if primitive else 'Before first ROSi step. Initial PROB / ROC and HTTP history are printed by replay_isaac.py.')
+        if not sync.timeline.get('steps'):
+            protocol.text='Local FAT controller | native PhysX / camera / optical feedback (recorded)'
+            recent=[e for e in sync.events if e['time_s']<=t]
+            event=recent[-1] if recent else {}
+            samples=[o for o in result.get('fat',{}).get('history',[]) if o['time_s']<=t]
+            text=f"Recorded phase: {event.get('stage',phase)}\n"
+            if phase=='fat: drive':
+                text='Local calls: optical_sample -> PhaseGradientSearch.decide -> IsaacMechanics.command\n'
+            if samples:
+                sample=samples[-1]
+                text+=f"Detector @ {sample['time_s']:.3f}s: visibility={sample['visibility']:.6f}, {sample.get('decision','initial')}\n"
+                if 'motor_commands_rad' in sample:
+                    text+='Motor targets [lower, upper] rad: '+json.dumps(sample['motor_commands_rad'])+'\n'
+            command_text.text=text+'FAT bench uses local calls; no ROSi adjustment wire operation.'
         pause.text = "Resume" if clock.paused else "Pause"
         app.update()
+        if aruco:
+            aruco.update(t)
+        if wrist_depth:
+            # Hydra's host annotators deliver the preceding render frame.
+            # Stamp those pixels with their pose time, especially after seeks.
+            wrist_depth.update(previous_camera_time)
+            previous_camera_time = t
         frames += 1
         if frames == 20:
             probe.save("render-settings.json", settings_snapshot(viewport))
@@ -176,9 +265,17 @@ try:
         app.update()
 except KeyboardInterrupt:
     pass
+except Exception as error:
+    import traceback
+    failure = str(error)
+    traceback.print_exc()
 finally:
+    if wrist_depth:
+        wrist_depth.close()
+    if aruco:
+        aruco.close()
     warm = np.array(intervals[30:] if len(intervals) > 60 else intervals)
-    report = {"frames": frames, "frozen": args.freeze, "source_time_s": float(t), "playback_speed": clock.speed,
+    report = {"frames": frames, "error": failure, "frozen": args.freeze, "source_time_s": float(t), "playback_speed": clock.speed,
         "playback_wall_s": time.monotonic()-wall_start,
         "source_start_s": start, "source_end_s": float(times[-1]), "reached_end": bool(t >= times[-1]),
         "visited_phases": sorted(visited_phases),
@@ -186,6 +283,8 @@ finally:
         "average_fps": float(1/np.mean(warm)) if len(warm) else 0.,
         "p95_frame_interval_s": float(np.percentile(warm, 95)) if len(warm) else None}
     probe.save("viewer-performance.json", report)
+    if args.state_dir:
+        (args.state_dir / "viewer-performance.json").write_text(json.dumps(report, indent=2))
     print("REPLAY_PERFORMANCE", json.dumps(report), flush=True)
     print(f"REPLAY_ONLY frames={frames} source={folder}", flush=True)
     app.close()
