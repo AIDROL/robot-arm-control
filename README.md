@@ -4,9 +4,9 @@
 
 这轮从器件暂存区开始，用 **xArm7** 完成五件放置，再抓取 STEP 模型对应的新 FAT。工具相机通过 ArUco 对准镜座，两轴接触入孔后由探测器图像反馈调光。工具撤出并回位后重新测量。
 
-[![播放完整 Michelson 仿真回放（53 秒）](docs/media/fat-cad-michelson-replay.jpg)](docs/media/fat-cad-michelson-replay.mp4?raw=true)
+https://github.com/user-attachments/assets/9f2d193b-f4ac-44a1-89d8-9c4fe5396701
 
-[播放 MP4](docs/media/fat-cad-michelson-replay.mp4?raw=true) · 约 53 秒，5 倍速。画面含全景、全局相机、末端 RGB-D、FAT 侧视和记录的探测器测量。
+约 53 秒，5 倍速。画面含全景、全局相机、末端 RGB-D、FAT 侧视和记录的探测器测量。
 
 | 仿真验收项 | 结果 |
 | --- | --- |
