@@ -6,7 +6,7 @@
 
 https://github.com/user-attachments/assets/9f2d193b-f4ac-44a1-89d8-9c4fe5396701
 
-约 53 秒，5 倍速。画面含全景、全局相机、末端 RGB-D、FAT 侧视和记录的探测器测量。
+约 53 秒，5 倍速。画面含全景、全局相机、末端 RGB-D、FAT 侧视和记录的探测器测量。 [备用 MP4](docs/media/fat-cad-michelson-replay.mp4?raw=true)。
 
 | 仿真验收项 | 结果 |
 | --- | --- |
