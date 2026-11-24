@@ -31,8 +31,7 @@ class OpticalDeviceVisualTests(unittest.TestCase):
         self.assertGreater(model.geom_rgba[screen, :3].min(), .9)
 
     def test_added_visuals_preserve_recorded_source_collision_and_inertia(self):
-        root = Path(__file__).resolve().parents[1]
-        source = root/'runs/isaac-michelson-final-20261103-006/source/michelson_experiment.py'
+        source = Path(__file__).resolve().parent / 'fixtures' / 'recorded_michelson_experiment.py'
         spec = importlib.util.spec_from_file_location('simulation.mujoco._recorded_layout', source)
         archived = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(archived)

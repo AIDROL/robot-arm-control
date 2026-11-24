@@ -76,13 +76,13 @@ env -u PYTHONPATH .venv/bin/python scripts/fat_closed_loop.py replay \
 
 Replace `overview` with `global`, `wrist`, or `fat` to choose the starting camera; cameras can also be changed in the replay window. Add `--wait` if the experiment is still running to wait for the run and evidence sealing to finish. Replay reads a saved trajectory and does not rerun the physics.
 
-If the local acceptance run is available, replace the directory above with `runs/fat-cad-full-20261118-02`. Trajectories, images, measurements, audit files, and `evidence-manifest.json` form the evidence package. Large run directories are not distributed with the repository.
+If the local acceptance run is available, replace the directory above with `runs/fat-cad-full-20261118-02`. Trajectories, images, measurements, audit files, and `evidence-manifest.json` form the local evidence package. Keep the latest full run that passes `verify` as the current result.
 
 ## Other experiments
 
 | Experiment | Description and entry point |
 | --- | --- |
-| Earlier Isaac workflow | Five-component assembly, FAT contact adjustment, and optical validation. The repository includes the historical acceptance trajectory; see the [validation report](docs/isaac-michelson-validation-2026-11-03.md). |
+| Earlier Isaac workflow | Five-component assembly, FAT contact adjustment, and optical validation. The [validation report](docs/isaac-michelson-validation-2026-11-03.md) records the historical results. |
 | MuJoCo Michelson workflow | Vision-based assembly, contact adjustment, and optical feedback: `./.venv/bin/python -m simulation.michelson_experiment --output runs/michelson-live --view`. See the [workflow documentation](docs/michelson-full-process.md). |
 | MuJoCo FAT contact test | Standalone alignment on a preassembled mount: `./.venv/bin/python -m simulation.fat_mechanics --michelson --output runs/michelson-demo --view`. See the [FAT contact validation](docs/fat-contact-michelson.md). |
 | Single-object visual grasp | Global-camera localization and wrist RGB-D grasp refinement: `./.venv/bin/python -m simulation.vision_pick_place --seed 7 --output runs/visual-grasp-demo --view`. See [visual pick and place](docs/vision-pick-place.md). |
@@ -99,7 +99,7 @@ These entry points cover different scenes and validation scopes. For example, th
 | `scripts/` | Entry point for the latest FAT workflow, status, verification, and replay |
 | `assets/`, `configs/` | Robot, FAT, and optical component models and scene configuration |
 | `docs/` | Experiment, validation, camera, and interface documentation |
-| `runs/` | Local run records; only selected historical acceptance data is included in the repository |
+| `runs/` | Generated local run records and replay evidence |
 
 - [Isaac cameras and optical viewer](docs/isaac-camera-optics-view.md): camera views, detector measurements, and replay options.
 - [Camera detection overlays](docs/camera-detection-overlay.md): ArUco boxes, corners, IDs, and coordinate axes.

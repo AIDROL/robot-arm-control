@@ -1,5 +1,7 @@
 # Isaac 相机与调光画面
 
+复现本文的历史回放命令需要本地的运行归档 `runs/isaac-michelson-final-20261103-006`。
+
 实际实现按后端放在 `simulation/isaac/` 和 `simulation/mujoco/`。`simulation/` 根目录保留旧命令的兼容入口，以及共用的 `michelson_assembly_optics.py` 和 `optical_sensor.py`。Isaac 的机械几何和独立运动学仍从原 MJCF 读取；动力学、接触、机器人物理状态和 RGB/深度帧来自 PhysX / Isaac。
 
 ## 立即查看已验收实验

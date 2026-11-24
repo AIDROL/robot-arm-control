@@ -1,5 +1,7 @@
 # Isaac Michelson 迁移与验收（通过，2026-11-03）
 
+复现本文的历史回放命令需要本地的运行归档 `runs/isaac-michelson-final-20261103-006`。
+
 已在本机 Isaac Sim 5.1 / PhysX 中从空实验区完成五件装配、FAT 双工具头接触调镜、工具归还以及新的 LightPipes 相位扫描验收。最终运行是 `runs/isaac-michelson-final-20261103-006`：`stage=full`、`started_from_empty_area=true`、`success=true`，独立审计全部通过。后面的开发失败和恢复记录保留，不以它们替代本次完整通过。
 
 ## 最终完整运行
