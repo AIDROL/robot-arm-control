@@ -2,7 +2,11 @@
 
 This repository contains the robot control and simulation components of the AIDROL optics project. Using an xArm7 model, it explores vision-based localization, optical component assembly, and closed-loop alignment with a fine alignment tool (FAT). Simulations use Isaac Sim and MuJoCo, with LightPipes for optical modeling.
 
-Results shown here are from simulation. The robot, gripper, cameras, mounts, and optical models still require calibration and validation against physical hardware; simulated errors do not establish real-world accuracy.
+The demonstration below reports simulation results. Real-world accuracy of the robot, gripper, cameras, mounts, and optical models requires calibration and physical validation.
+
+## Physical xArm 7 bring-up
+
+The physical xArm 7 passed seven individual joint round trips and an unloaded Gripper G2 cycle. Ubuntu Ethernet setup, SDK commands, and the acceptance record are in the [hardware guide](hardware/README.md).
 
 ## Latest demonstration: assembly and FAT alignment
 
